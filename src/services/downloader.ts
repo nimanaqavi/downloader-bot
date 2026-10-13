@@ -61,8 +61,8 @@ export function buildYtDlpArgs(options: BuildArgsOptions): string[] {
     "--no-cache-dir",
     "--socket-timeout",
     "30",
-    "--max-duration",
-    String(options.maxDurationSeconds),
+    "--match-filter",
+    `duration <=? ${options.maxDurationSeconds} & !is_live`,
     "--max-filesize",
     `${Math.floor(options.safeCapBytes)}`,
     "--no-live-from-start",
@@ -173,6 +173,11 @@ export class Downloader {
 
     try {
       const processResult = await runProcess("yt-dlp", args, this.timeoutMs);
+      if (processResult.stdout.includes("does not pass filter")) {
+        throw new Error(
+          "مدت زمان محتوا بیشتر از حد مجاز (حداکثر ۳ ساعت) است یا این محتوا یک پخش زنده (لایو) می‌باشد."
+        );
+      }
       const files = await readdir(tempDirectory);
 
       // Identify downloaded files

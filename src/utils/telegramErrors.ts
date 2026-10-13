@@ -8,8 +8,8 @@ export function friendlyDownloadError(error: unknown): string {
     if (lower.includes("max-filesize") || lower.includes("file is larger") || lower.includes("larger than max-filesize")) {
       return "حجم فایل بیشتر از سقف مجاز سرور است. لطفاً کیفیت پایین‌تر یا نسخه صوتی را انتخاب کنید.";
     }
-    if (lower.includes("max-duration") || lower.includes("longer than max-duration")) {
-      return "مدت زمان محتوا بیشتر از حد مجاز (حداکثر ۳ ساعت) است.";
+    if (lower.includes("does not pass filter") || lower.includes("longer than max-duration")) {
+      return "مدت زمان محتوا بیشتر از حد مجاز (حداکثر ۳ ساعت) است یا این محتوا یک پخش زنده (لایو) می‌باشد.";
     }
     if (lower.includes("format not available") || lower.includes("requested format")) {
       return "فرمت یا کیفیت درخواستی برای این لینک در دسترس نیست.";
