@@ -19,7 +19,12 @@ export interface ProcessResult {
   stderr: string;
 }
 
-export function runProcess(command: string, args: string[], timeoutMs: number): Promise<ProcessResult> {
+export function runProcess(
+  command: string,
+  args: string[],
+  timeoutMs: number,
+  onProgress?: (percentage: number) => void
+): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
     const home = process.env.HOME || process.env.USERPROFILE || "";
     const extraPath = home ? `${home}/bin${delimiter}${home}/.local/bin${delimiter}` : "";
@@ -49,7 +54,17 @@ export function runProcess(command: string, args: string[], timeoutMs: number): 
       else resolve({ stdout, stderr });
     };
 
-    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
+    child.stdout.on("data", (chunk: Buffer) => {
+      const text = chunk.toString();
+      stdout += text;
+      if (onProgress) {
+        const match = text.match(/\[download\]\s+(\d+(?:\.\d+)?)%/);
+        if (match && match[1]) {
+          onProgress(Math.min(100, Math.round(parseFloat(match[1]))));
+        }
+      }
+    });
+
     child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
     child.on("error", (error) => finish(error));
     child.on("close", (code) => {

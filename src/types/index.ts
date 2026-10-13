@@ -50,6 +50,7 @@ export interface DownloadResult {
   thumbnailPath?: string;
   fileSizeBytes: number;
   title?: string;
+  durationSeconds?: number;
   platformName?: string;
   appliedQuality?: string;
 }
