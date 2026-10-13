@@ -20,7 +20,8 @@ const schema = z.object({
   AUTO_UPDATE_YTDLP: booleanString,
   INSTAGRAM_COOKIES_PATH: z.string().optional(),
   MAX_DURATION_SECONDS: z.coerce.number().int().positive().default(10800),
-  DISK_SAFETY_MARGIN_MB: z.coerce.number().int().positive().default(100)
+  DISK_SAFETY_MARGIN_MB: z.coerce.number().int().positive().default(100),
+  MAX_DISK_BUDGET_MB: z.coerce.number().int().positive().default(1000)
 });
 
 const parsed = schema.safeParse(process.env);
@@ -52,5 +53,6 @@ export const config = {
     ? resolve(parsed.data.INSTAGRAM_COOKIES_PATH)
     : undefined,
   maxDurationSeconds: parsed.data.MAX_DURATION_SECONDS,
-  diskSafetyMarginBytes: parsed.data.DISK_SAFETY_MARGIN_MB * 1024 * 1024
+  diskSafetyMarginBytes: parsed.data.DISK_SAFETY_MARGIN_MB * 1024 * 1024,
+  maxDiskBudgetMb: parsed.data.MAX_DISK_BUDGET_MB
 };
