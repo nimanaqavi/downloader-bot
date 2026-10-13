@@ -39,6 +39,10 @@ describe("Universal Media URL Router", () => {
 
     const sc = await parseMediaUrl("https://soundcloud.com/artist/track-name");
     assert.equal(sc?.platform, "soundcloud");
+
+    const spotify = await parseMediaUrl("https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT");
+    assert.equal(spotify?.platform, "spotify");
+    assert.equal(spotify?.platformName, "اسپاتیفای");
   });
 
   it("routes unknown domains to generic platform", async () => {

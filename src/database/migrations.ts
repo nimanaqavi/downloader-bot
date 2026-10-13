@@ -49,6 +49,13 @@ const migrations = [
       CREATE UNIQUE INDEX IF NOT EXISTS idx_cache_url_quality ON download_cache(url_normalized, quality);
       CREATE INDEX IF NOT EXISTS idx_cache_created ON download_cache(created_at DESC);
     `
+  },
+  {
+    version: 4,
+    sql: `
+      ALTER TABLE users ADD COLUMN language TEXT NOT NULL DEFAULT 'fa';
+      ALTER TABLE downloads ADD COLUMN platform TEXT;
+    `
   }
 ];
 
