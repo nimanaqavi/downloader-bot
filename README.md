@@ -1,110 +1,62 @@
-# Instagram Telegram Downloader
+# Mimo Multi-Downloader Telegram Bot
 
-A TypeScript Telegram bot that downloads public Instagram posts, reels, TV videos, and story links through `yt-dlp`. It stores users and download results in SQLite and provides an owner-only admin panel inside Telegram.
+A lightweight, high-performance TypeScript Telegram bot that downloads public media from virtually any platform supported by `yt-dlp` (YouTube, Instagram, TikTok, Twitter/X, Facebook, Reddit, SoundCloud, and generic web links). Built for low-resource environments (e.g. Alwaysdata 256 MB RAM VPS).
 
-## Features
+---
 
-- Strict Instagram URL validation and per-user rate limiting
-- Download status updates, thumbnail uploads, 50 MB default size guard, and temporary-file cleanup
-- SQLite user/download tracking with automatic versioned migrations
-- Admin user list, download history, per-user stats, ban/unban controls, and pagination
-- Global statistics, success rate, and most-active-user leaderboard
-- Text/photo/video broadcasts using Telegram's native message-copy API
-- Startup checks for `yt-dlp` and `ffmpeg`, plus optional `yt-dlp` auto-update
+## ⚡️ Key Features
 
-## Requirements
+- **Universal Multi-Downloader**:
+  - **YouTube**: Dedicated inline quality menu (`720p`, `480p`, `360p`, `MP3`) with aspect-ratio-safe format rules.
+  - **Instagram**: Single posts, reels, and multi-slide carousels (up to 10 items processed one-by-one with immediate file unlinking).
+  - **TikTok, Twitter/X, Facebook, Reddit, SoundCloud**: Stream-copy progressive MP4 downloads up to 720p without heavy CPU re-encoding.
+  - **Any Web Link**: Automatic detection and extraction for any site supported by `yt-dlp`.
+  - **Audio (MP3) on Demand**: Download audio from any site by prefixing links with `mp3` (e.g., `mp3 https://...`).
+- **Security & Hardening**:
+  - Full SSRF protection blocking private IPs, link-local addresses, loopback (`127.0.0.1`, `::1`), and malicious DNS rebinding.
+  - Safe child process execution using argument arrays (zero shell injection risk).
+  - Maximum media duration ceiling (default 3 hours, configurable).
+- **Resource Protection for 256 MB VPS**:
+  - Dynamic disk space calculations factoring in single-stream vs separate DASH stream merges.
+  - SQLite WAL mode with memory cache capped at 2 MB (`cache_size = -2000`) and `mmap_size = 0`.
+  - GramJS MTProto uploader tuned to 2 workers to prevent memory spikes during high-speed upload.
+  - Automatic temp directory cleanup on startup and after every job (success or failure).
+- **Nightly yt-dlp Updates**: Automatic 24-hour maintenance cycle updating `yt-dlp` without restarting the Node server.
 
-- Node.js 20 or newer
-- A Telegram bot token from [@BotFather](https://t.me/BotFather)
-- Python 3 with pip, used to install `yt-dlp`
-- `yt-dlp` and `ffmpeg` available in `PATH`
+---
 
-The bot deliberately fails at startup with an actionable error if `yt-dlp` or `ffmpeg` is missing.
+## ⚙️ Configuration (.env)
 
-## Install System Dependencies
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `BOT_TOKEN` | *Required* | Telegram Bot token from [@BotFather](https://t.me/BotFather) |
+| `ADMIN_USER_IDS` | *Required* | Comma-separated list of numeric Telegram user IDs |
+| `DATABASE_PATH` | `./data/bot.db` | SQLite database file location |
+| `TELEGRAM_FILE_LIMIT_MB` | `500` | Maximum file size allowed (tested up to 500 MB via MTProto) |
+| `MAX_DURATION_SECONDS` | `10800` | Maximum allowed media duration in seconds (3 hours) |
+| `DISK_SAFETY_MARGIN_MB` | `100` | Safety disk margin reserved for database and OS |
+| `RATE_LIMIT_MAX` | `3` | Max download requests allowed per window |
+| `RATE_LIMIT_WINDOW_SECONDS`| `60` | Rate-limit window in seconds |
+| `DOWNLOAD_TIMEOUT_SECONDS` | `300` | Maximum download runtime before timing out |
+| `AUTO_UPDATE_YTDLP` | `false` | Enable nightly background updates for `yt-dlp` |
+| `INSTAGRAM_COOKIES_PATH` | *Optional* | Path to Netscape cookies file for restricted media |
+| `TELEGRAM_API_ID` | `2040` | Telegram MTProto Client API ID |
+| `TELEGRAM_API_HASH` | `...` | Telegram MTProto Client API Hash |
 
-Linux/macOS:
+---
 
-```bash
-chmod +x scripts/setup.sh
-./scripts/setup.sh
-```
-
-The script installs `yt-dlp` through pip. It installs ffmpeg through `apt` on Debian/Ubuntu or Homebrew on macOS. Existing installations are detected and skipped.
-
-Windows PowerShell:
-
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\scripts\setup.ps1
-```
-
-The PowerShell script uses Python's pip for `yt-dlp` and `winget` for ffmpeg. Open a new terminal afterward so newly installed commands are visible in `PATH`.
-
-## Configure
-
-Install Node dependencies and create the environment file:
-
-```bash
-npm install
-cp .env.example .env
-```
-
-On Windows, create `.env` from `.env.example` manually or run `Copy-Item .env.example .env`.
-
-Required settings:
-
-```dotenv
-BOT_TOKEN=123456789:your_bot_token
-ADMIN_USER_IDS=123456789,987654321
-```
-
-Find your numeric Telegram user ID through a utility bot such as `@userinfobot`. Admin commands silently ignore non-admin users.
-
-Optional settings:
-
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `DATABASE_PATH` | `./data/bot.db` | SQLite file location |
-| `RATE_LIMIT_MAX` | `3` | Downloads allowed per rate-limit window |
-| `RATE_LIMIT_WINDOW_SECONDS` | `60` | Rate-limit window |
-| `TELEGRAM_FILE_LIMIT_MB` | `50` | Maximum file sent through Telegram Bot API |
-| `DOWNLOAD_TIMEOUT_SECONDS` | `180` | Maximum `yt-dlp` runtime per request |
-| `AUTO_UPDATE_YTDLP` | `false` | Run `yt-dlp -U` before accepting requests |
-| `INSTAGRAM_COOKIES_PATH` | empty | Absolute or project-relative Netscape cookies file |
-
-`AUTO_UPDATE_YTDLP=true` helps keep extraction compatible with Instagram changes, but it adds startup latency. An update failure is logged and does not prevent startup when the installed version remains usable.
-
-Some stories, age-restricted media, and authenticated posts require Instagram cookies. Export a Netscape-format cookies file from a browser session and set `INSTAGRAM_COOKIES_PATH`. Protect this file like a password and never commit it. Private content is still subject to the permissions of that Instagram account.
-
-## Run
-
-Development:
+## 🚀 Running the Bot
 
 ```bash
-npm run dev
-```
+# Install dependencies
+npm ci
 
-Production:
-
-```bash
+# Compile TypeScript
 npm run build
+
+# Run unit tests
+npm test
+
+# Start in production
 npm start
 ```
-
-The database directory and schema are created automatically on first launch. Stop the bot with `Ctrl+C` to close Telegram polling and SQLite cleanly.
-
-## Bot Usage
-
-- `/start` or `/help`: user instructions
-- Send an Instagram `/p/`, `/reel/`, `/tv/`, or `/stories/` URL to download it
-- `/admin`: owner-only inline admin panel
-- `/cancel`: cancel an in-progress admin broadcast prompt
-
-Broadcasts copy the selected Telegram message to every known user. Telegram recipients who blocked the bot or deleted their account are counted as failures. Large broadcasts are sequential to avoid aggressive API bursts and may take time.
-
-## Notes
-
-- Telegram's hosted Bot API commonly limits bot uploads to 50 MB. Keep `TELEGRAM_FILE_LIMIT_MB=50` unless using an API setup with a different verified limit.
-- Download history records successes and failures. Failed downloads have a null file size because no valid final media was available.
-- Instagram and Telegram terms and local copyright laws apply. Only download or redistribute media you are authorized to use.
