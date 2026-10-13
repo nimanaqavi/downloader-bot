@@ -16,8 +16,8 @@ describe("Downloader Argument Builder", () => {
 
     assert.ok(args.includes("--force-ipv4"));
     assert.ok(args.includes("--no-playlist"));
-    assert.ok(args.includes("--max-duration"));
-    assert.ok(args.includes("10800"));
+    assert.ok(args.includes("--match-filter"));
+    assert.ok(args.some((a) => a.includes("duration <=? 10800")));
     assert.ok(args.includes("--format"));
     assert.ok(args.some((arg) => arg.includes("height<=?720")));
     assert.ok(args.includes("--format-sort"));
