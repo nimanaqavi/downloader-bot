@@ -57,6 +57,15 @@ export class UsersRepository {
     this.db.prepare("UPDATE users SET is_banned = ? WHERE id = ?").run(banned ? 1 : 0, id);
   }
 
+  setLanguage(telegramId: string, language: string): void {
+    this.db.prepare("UPDATE users SET language = ? WHERE telegram_id = ?").run(language, telegramId);
+  }
+
+  getLanguage(telegramId: string): string {
+    const row = this.db.prepare("SELECT language FROM users WHERE telegram_id = ?").get(telegramId) as { language?: string } | undefined;
+    return row?.language || "fa";
+  }
+
   allTelegramIds(): string[] {
     return (this.db.prepare("SELECT telegram_id FROM users ORDER BY id").all() as Array<{ telegram_id: string }>).map(
       (row) => row.telegram_id

@@ -21,6 +21,7 @@ export interface DownloadRecord {
   id: number;
   userId: number;
   url: string;
+  platform?: string;
   status: "success" | "failed";
   fileSizeBytes: number | null;
   createdAt: string;

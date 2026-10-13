@@ -1,0 +1,2 @@
+ALTER TABLE users ADD COLUMN language TEXT NOT NULL DEFAULT 'fa';
+ALTER TABLE downloads ADD COLUMN platform TEXT;
