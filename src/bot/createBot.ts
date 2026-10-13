@@ -1,6 +1,7 @@
 import { Telegraf } from "telegraf";
 import { BroadcastManager } from "../admin/broadcast.js";
 import { registerAdminHandlers } from "../admin/handlers.js";
+import type { CacheRepository } from "../database/repositories/cache.js";
 import type { DownloadsRepository } from "../database/repositories/downloads.js";
 import type { UsersRepository } from "../database/repositories/users.js";
 import { DownloadQueue } from "../services/downloadQueue.js";
@@ -18,6 +19,7 @@ interface BotDependencies {
   adminIds: Set<string>;
   users: UsersRepository;
   downloads: DownloadsRepository;
+  cache: CacheRepository;
   downloader: Downloader;
   rateLimiter: RateLimiter;
   mtprotoUploader: MtprotoUploader;
@@ -32,8 +34,16 @@ export function createBot(dependencies: BotDependencies): Telegraf<BotContext> {
   bot.use(requireNotBanned(dependencies.adminIds));
   bot.use(broadcasts.middleware());
   registerStartHandler(bot);
-  registerAdminHandlers(bot, dependencies.users, dependencies.downloads, dependencies.adminIds, broadcasts);
-  registerDownloadHandler(bot, dependencies.downloads, dependencies.downloader, dependencies.rateLimiter, downloadQueue, dependencies.mtprotoUploader);
+  registerAdminHandlers(bot, dependencies.users, dependencies.downloads, dependencies.adminIds, broadcasts, dependencies.cache);
+  registerDownloadHandler(
+    bot,
+    dependencies.downloads,
+    dependencies.downloader,
+    dependencies.rateLimiter,
+    downloadQueue,
+    dependencies.mtprotoUploader,
+    dependencies.cache
+  );
   bot.catch((error, ctx) => {
     console.error(`[bot] Unhandled update ${ctx.update.update_id}:`, error);
   });

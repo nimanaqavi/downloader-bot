@@ -21,7 +21,9 @@ const schema = z.object({
   INSTAGRAM_COOKIES_PATH: z.string().optional(),
   MAX_DURATION_SECONDS: z.coerce.number().int().positive().default(10800),
   DISK_SAFETY_MARGIN_MB: z.coerce.number().int().positive().default(100),
-  MAX_DISK_BUDGET_MB: z.coerce.number().int().positive().default(1000)
+  MAX_DISK_BUDGET_MB: z.coerce.number().int().positive().default(1000),
+  STORAGE_CHANNEL_ID: z.string().optional(),
+  BOT_USERNAME: z.string().default("instagramdl_mahibot")
 });
 
 const parsed = schema.safeParse(process.env);
@@ -54,5 +56,7 @@ export const config = {
     : undefined,
   maxDurationSeconds: parsed.data.MAX_DURATION_SECONDS,
   diskSafetyMarginBytes: parsed.data.DISK_SAFETY_MARGIN_MB * 1024 * 1024,
-  maxDiskBudgetMb: parsed.data.MAX_DISK_BUDGET_MB
+  maxDiskBudgetMb: parsed.data.MAX_DISK_BUDGET_MB,
+  storageChannelId: parsed.data.STORAGE_CHANNEL_ID ? parsed.data.STORAGE_CHANNEL_ID.trim() : undefined,
+  botUsername: parsed.data.BOT_USERNAME.replace(/^@/, "")
 };

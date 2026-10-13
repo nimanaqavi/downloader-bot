@@ -1,3 +1,8 @@
+export interface UploadResponse {
+  messageId: number;
+  chatId: number | string;
+}
+
 export class MtprotoUploader {
   private client: any = null;
   private connectingPromise: Promise<any> | null = null;
@@ -49,43 +54,57 @@ export class MtprotoUploader {
     chatId: number | string,
     videoPath: string,
     caption: string,
-    thumbnailPath?: string
-  ): Promise<void> {
+    thumbnailPath?: string,
+    progressCallback?: (percentage: number) => void
+  ): Promise<UploadResponse> {
     const client = await this.getClient();
-    await client.sendFile(chatId, {
+    const message = await client.sendFile(chatId, {
       file: videoPath,
       caption,
       thumb: thumbnailPath,
       supportsStreaming: true,
-      workers: 2 // ponytail: 2 workers prevents OOM on 256MB RAM servers while maintaining fast upload
+      parseMode: "html",
+      workers: 2, // ponytail: 2 workers prevents OOM on 256MB RAM servers
+      progressCallback: progressCallback
+        ? (progress: number) => progressCallback(Math.round(progress * 100))
+        : undefined
     });
+    return { messageId: message.id, chatId };
   }
 
   async sendAudio(
     chatId: number | string,
     audioPath: string,
     caption: string,
-    thumbnailPath?: string
-  ): Promise<void> {
+    thumbnailPath?: string,
+    progressCallback?: (percentage: number) => void
+  ): Promise<UploadResponse> {
     const client = await this.getClient();
-    await client.sendFile(chatId, {
+    const message = await client.sendFile(chatId, {
       file: audioPath,
       caption,
       thumb: thumbnailPath,
-      workers: 2 // ponytail: 2 workers prevents OOM on 256MB RAM servers
+      parseMode: "html",
+      workers: 2,
+      progressCallback: progressCallback
+        ? (progress: number) => progressCallback(Math.round(progress * 100))
+        : undefined
     });
+    return { messageId: message.id, chatId };
   }
 
   async sendPhoto(
     chatId: number | string,
     photoPath: string,
     caption: string
-  ): Promise<void> {
+  ): Promise<UploadResponse> {
     const client = await this.getClient();
-    await client.sendFile(chatId, {
+    const message = await client.sendFile(chatId, {
       file: photoPath,
       caption,
+      parseMode: "html",
       workers: 2
     });
+    return { messageId: message.id, chatId };
   }
 }
