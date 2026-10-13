@@ -206,7 +206,11 @@ export class Downloader {
   async download(
     url: string,
     quality: VideoQuality = "compact",
-    options?: { isInstagramCarousel?: boolean; playlistItem?: number }
+    options?: {
+      isInstagramCarousel?: boolean;
+      playlistItem?: number;
+      onProgress?: (percentage: number) => void;
+    }
   ): Promise<DownloadResult & { tempDirectory: string; isAudio?: boolean }> {
     const isAudio = quality === "audio";
     const isYouTube = /(?:youtube\.com|youtu\.be)/i.test(url);
@@ -239,7 +243,7 @@ export class Downloader {
     });
 
     try {
-      const processResult = await runProcess("yt-dlp", args, this.timeoutMs);
+      const processResult = await runProcess("yt-dlp", args, this.timeoutMs, options?.onProgress);
       if (processResult.stdout.includes("does not pass filter")) {
         throw new Error(
           "مدت زمان محتوا بیشتر از حد مجاز (حداکثر ۳ ساعت) است یا این محتوا یک پخش زنده (لایو) می‌باشد."

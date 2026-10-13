@@ -9,7 +9,9 @@ export function escapeHtml(str: string): string {
 }
 
 export function formatDuration(seconds?: number): string {
-  if (!seconds || seconds <= 0 || isNaN(seconds)) return "--:--";
+  if (seconds === undefined || seconds === null || isNaN(seconds) || seconds <= 0) {
+    return "--:--";
+  }
   const sec = Math.floor(seconds);
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
@@ -36,7 +38,7 @@ export function renderProgressBar(percentage: number): string {
   const clamped = Math.max(0, Math.min(100, Math.round(percentage)));
   const filledCount = Math.floor(clamped / 10);
   const emptyCount = 10 - filledCount;
-  const bar = "■".repeat(filledCount) + "□".repeat(emptyCount);
+  const bar = "▰".repeat(filledCount) + "▱".repeat(emptyCount);
   return `[${bar}] ${clamped}%`;
 }
 

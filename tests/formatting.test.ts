@@ -28,9 +28,9 @@ describe("UI Formatting Helpers", () => {
   });
 
   it("renders 10-block progress bar with numbers in brackets", () => {
-    assert.equal(renderProgressBar(0), "[□□□□□□□□□□] 0%");
-    assert.equal(renderProgressBar(50), "[■■■■■□□□□□] 50%");
-    assert.equal(renderProgressBar(100), "[■■■■■■■■■■] 100%");
+    assert.equal(renderProgressBar(0), "[▱▱▱▱▱▱▱▱▱▱] 0%");
+    assert.equal(renderProgressBar(50), "[▰▰▰▰▰▱▱▱▱▱] 50%");
+    assert.equal(renderProgressBar(100), "[▰▰▰▰▰▰▰▰▰▰] 100%");
   });
 
   it("truncates long titles safely", () => {

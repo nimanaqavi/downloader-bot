@@ -23,6 +23,9 @@ export function friendlyDownloadError(error: unknown): string {
     if (lower.includes("timeout") || lower.includes("timed out")) {
       return "زمان پردازش یا دانلود بیش از حد طول کشید (Timeout). لطفاً مجدداً امتحان کنید.";
     }
+    if (lower.includes("drm protection") || lower.includes("drm protected")) {
+      return "این وب‌سایت دارای قفل DRM است و دانلود مستقیم آن امکان‌پذیر نیست.";
+    }
     if (
       lower.includes("private video") ||
       lower.includes("this video is private") ||

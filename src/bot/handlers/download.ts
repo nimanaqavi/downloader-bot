@@ -67,6 +67,15 @@ export function registerDownloadHandler(
       return;
     }
 
+    // Immediate DRM check (e.g. Spotify) to prevent hanging
+    if (media.isUnsupportedDrm) {
+      await ctx.reply(
+        "<b>✕ خطا:</b> آهنگ‌های اسپاتیفای دارای قفل رمزنگاری DRM هستند و امکان دانلود مستقیم آن‌ها وجود ندارد.",
+        { parse_mode: "HTML" }
+      );
+      return;
+    }
+
     const rate = rateLimiter.consume(String(ctx.from.id));
     if (!rate.allowed) {
       await ctx.reply(
@@ -164,6 +173,8 @@ export function registerDownloadHandler(
       url: pending.url,
       urlNormalized: pending.urlNormalized,
       platformName: pending.platformName,
+      title: pending.title,
+      duration: pending.duration,
       quality,
       statusMsgId: pending.statusMsgId,
       downloads,
@@ -386,17 +397,19 @@ interface PipelineOptions {
   url: string;
   urlNormalized: string;
   platformName: string;
+  title?: string;
+  duration?: number;
   quality: VideoQuality;
   statusMsgId: number;
-  downloads: DownloadsRepository,
-  downloader: Downloader,
-  downloadQueue: DownloadQueue,
-  mtprotoUploader: MtprotoUploader,
-  cache: CacheRepository
+  downloads: DownloadsRepository;
+  downloader: Downloader;
+  downloadQueue: DownloadQueue;
+  mtprotoUploader: MtprotoUploader;
+  cache: CacheRepository;
 }
 
 async function executePipeline(opts: PipelineOptions): Promise<void> {
-  const { ctx, url, urlNormalized, platformName, quality, statusMsgId, downloads, downloader, downloadQueue, mtprotoUploader, cache } = opts;
+  const { ctx, url, urlNormalized, platformName, title, duration, quality, statusMsgId, downloads, downloader, downloadQueue, mtprotoUploader, cache } = opts;
 
   // 1. Check cache first
   const cached = cache.find(urlNormalized, quality);
@@ -425,30 +438,32 @@ async function executePipeline(opts: PipelineOptions): Promise<void> {
 
   let tempDirectory: string | undefined;
   try {
+    let lastDownloadPct = 0;
     const result = await downloadQueue.add(async () => {
-      await safeEditMessageText(
-        ctx.telegram,
-        ctx.chat.id,
-        statusMsgId,
-        `▸ در حال دانلود... ⚡\n<code>${renderProgressBar(30)}</code>`
-      );
-
-      return await downloader.download(url, quality);
+      return await downloader.download(url, quality, {
+        onProgress: (pct: number) => {
+          if (pct >= lastDownloadPct + 10 || pct === 100) {
+            lastDownloadPct = pct;
+            safeEditMessageText(
+              ctx.telegram,
+              ctx.chat.id,
+              statusMsgId,
+              `▸ در حال دانلود... ⚡\n<code>${renderProgressBar(pct)}</code>`,
+              undefined,
+              2000
+            );
+          }
+        }
+      });
     });
 
     tempDirectory = result.tempDirectory;
 
-    await safeEditMessageText(
-      ctx.telegram,
-      ctx.chat.id,
-      statusMsgId,
-      `▸ در حال آپلود... 📤\n<code>${renderProgressBar(85)}</code>`
-    );
-
-    const titleText = escapeHtml(truncateText(result.title || platformName, 80));
+    const titleText = escapeHtml(truncateText(result.title || title || platformName, 80));
+    const effectiveDuration = result.durationSeconds ?? duration;
     const caption = [
       `<b>${titleText}</b>`,
-      `<blockquote>مدت: <code>${formatDuration(result.isAudio ? undefined : undefined)}</code> │ حجم: <code>${formatBytes(result.fileSizeBytes)}</code> │ منبع: ${platformName}</blockquote>`,
+      `<blockquote>مدت: <code>${formatDuration(effectiveDuration)}</code> │ حجم: <code>${formatBytes(result.fileSizeBytes)}</code> │ منبع: ${platformName}</blockquote>`,
       `@${config.botUsername}`
     ].join("\n");
 
@@ -458,9 +473,29 @@ async function executePipeline(opts: PipelineOptions): Promise<void> {
       ? Markup.inlineKeyboard([[Markup.button.callback("🎵 دریافت MP3", `mp3:${downloadId}`)]])
       : undefined;
 
-    const uploadRes = await sendMediaMessage(ctx, result, caption, mtprotoUploader, mp3Button);
+    let lastUploadPct = 0;
+    const uploadRes = await sendMediaMessage(
+      ctx,
+      result,
+      caption,
+      mtprotoUploader,
+      mp3Button,
+      (pct: number) => {
+        if (pct >= lastUploadPct + 15 || pct === 100) {
+          lastUploadPct = pct;
+          safeEditMessageText(
+            ctx.telegram,
+            ctx.chat.id,
+            statusMsgId,
+            `▸ در حال آپلود... 📤\n<code>${renderProgressBar(pct)}</code>`,
+            undefined,
+            2000
+          );
+        }
+      }
+    );
 
-    // Save to cache (if storage channel exists, send there too for permanent caching)
+    // Save to cache
     if (uploadRes) {
       cache.save({
         urlNormalized,
@@ -469,7 +504,8 @@ async function executePipeline(opts: PipelineOptions): Promise<void> {
         messageId: uploadRes.messageId,
         fileSizeBytes: result.fileSizeBytes,
         mediaType: result.mediaType,
-        title: result.title
+        title: result.title || title,
+        durationSeconds: effectiveDuration
       });
 
       if (config.storageChannelId) {
@@ -482,7 +518,8 @@ async function executePipeline(opts: PipelineOptions): Promise<void> {
             messageId: storageRes.message_id,
             fileSizeBytes: result.fileSizeBytes,
             mediaType: result.mediaType,
-            title: result.title
+            title: result.title || title,
+            durationSeconds: effectiveDuration
           });
         } catch (storageErr) {
           console.warn("[storage channel] Failed to copy to storage channel:", storageErr);
@@ -513,15 +550,16 @@ async function sendMediaMessage(
   result: DownloadResult,
   caption: string,
   mtprotoUploader: MtprotoUploader,
-  extraMarkup?: any
+  extraMarkup?: any,
+  progressCallback?: (pct: number) => void
 ): Promise<{ messageId: number; chatId: string | number } | undefined> {
   try {
     if (result.mediaType === "audio") {
-      return await mtprotoUploader.sendAudio(ctx.chat.id, result.mediaPath, caption, result.thumbnailPath);
+      return await mtprotoUploader.sendAudio(ctx.chat.id, result.mediaPath, caption, result.thumbnailPath, progressCallback);
     } else if (result.mediaType === "photo") {
       return await mtprotoUploader.sendPhoto(ctx.chat.id, result.mediaPath, caption);
     } else {
-      const res = await mtprotoUploader.sendVideo(ctx.chat.id, result.mediaPath, caption, result.thumbnailPath);
+      const res = await mtprotoUploader.sendVideo(ctx.chat.id, result.mediaPath, caption, result.thumbnailPath, progressCallback);
       if (extraMarkup) {
         await ctx.telegram.editMessageReplyMarkup(ctx.chat.id, res.messageId, undefined, extraMarkup.reply_markup).catch(() => undefined);
       }

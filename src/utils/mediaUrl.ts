@@ -8,6 +8,7 @@ export type SupportedPlatform =
   | "facebook"
   | "reddit"
   | "soundcloud"
+  | "spotify"
   | "generic";
 
 export interface ParsedMediaUrl {
@@ -15,6 +16,7 @@ export interface ParsedMediaUrl {
   platform: SupportedPlatform;
   platformName: string;
   isAudioRequested?: boolean;
+  isUnsupportedDrm?: boolean;
 }
 
 export const platformDisplayNames: Record<SupportedPlatform, string> = {
@@ -25,6 +27,7 @@ export const platformDisplayNames: Record<SupportedPlatform, string> = {
   facebook: "فیسبوک",
   reddit: "ردیت",
   soundcloud: "ساندکلاد",
+  spotify: "اسپاتیفای",
   generic: "وب"
 };
 
@@ -42,6 +45,7 @@ export async function parseMediaUrl(input: string): Promise<ParsedMediaUrl | nul
   const host = url.hostname.toLowerCase().replace(/^www\./, "");
 
   let platform: SupportedPlatform = "generic";
+  let isUnsupportedDrm = false;
 
   if (host === "youtube.com" || host === "m.youtube.com" || host === "youtu.be") {
     platform = "youtube";
@@ -62,6 +66,14 @@ export async function parseMediaUrl(input: string): Promise<ParsedMediaUrl | nul
     platform = "reddit";
   } else if (host === "soundcloud.com" || host.endsWith(".soundcloud.com")) {
     platform = "soundcloud";
+  } else if (
+    host === "spotify.com" ||
+    host === "open.spotify.com" ||
+    host === "spotify.link" ||
+    host.endsWith(".spotify.com")
+  ) {
+    platform = "spotify";
+    isUnsupportedDrm = true;
   } else {
     platform = "generic";
   }
@@ -70,6 +82,7 @@ export async function parseMediaUrl(input: string): Promise<ParsedMediaUrl | nul
     url: url.toString(),
     platform,
     platformName: platformDisplayNames[platform],
-    isAudioRequested
+    isAudioRequested,
+    isUnsupportedDrm
   };
 }
