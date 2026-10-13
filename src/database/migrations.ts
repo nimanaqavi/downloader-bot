@@ -23,6 +23,12 @@ const migrations = [
       CREATE INDEX idx_downloads_user_created ON downloads(user_id, created_at DESC);
       CREATE INDEX idx_downloads_created ON downloads(created_at DESC);
     `
+  },
+  {
+    version: 2,
+    sql: `
+      ALTER TABLE downloads RENAME COLUMN instagram_url TO url;
+    `
   }
 ];
 

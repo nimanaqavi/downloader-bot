@@ -4,7 +4,7 @@ import { config } from "./config.js";
 import { createDatabase } from "./database/client.js";
 import { DownloadsRepository } from "./database/repositories/downloads.js";
 import { UsersRepository } from "./database/repositories/users.js";
-import { verifyRuntimeDependencies } from "./services/dependencies.js";
+import { scheduleNightlyYtDlpUpdate, verifyRuntimeDependencies } from "./services/dependencies.js";
 import { Downloader } from "./services/downloader.js";
 import { MtprotoUploader } from "./services/mtprotoUploader.js";
 import { killAllActiveProcesses } from "./services/process.js";
@@ -25,6 +25,7 @@ async function main(): Promise<void> {
   await cleanupOrphanedTempDirs();
 
   await verifyRuntimeDependencies(config.autoUpdateYtDlp);
+  scheduleNightlyYtDlpUpdate(config.autoUpdateYtDlp);
   const db = createDatabase(config.databasePath);
   const users = new UsersRepository(db);
   const downloads = new DownloadsRepository(db);
@@ -40,7 +41,13 @@ async function main(): Promise<void> {
     adminIds: config.adminUserIds,
     users,
     downloads,
-    downloader: new Downloader(config.downloadTimeoutMs, config.telegramFileLimitBytes, config.instagramCookiesPath),
+    downloader: new Downloader(
+      config.downloadTimeoutMs,
+      config.telegramFileLimitBytes,
+      config.instagramCookiesPath,
+      config.maxDurationSeconds,
+      config.diskSafetyMarginBytes
+    ),
     rateLimiter: new RateLimiter(config.rateLimitMax, config.rateLimitWindowMs),
     mtprotoUploader
   });

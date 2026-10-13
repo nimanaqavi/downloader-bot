@@ -75,4 +75,17 @@ export class MtprotoUploader {
       workers: 2 // ponytail: 2 workers prevents OOM on 256MB RAM servers
     });
   }
+
+  async sendPhoto(
+    chatId: number | string,
+    photoPath: string,
+    caption: string
+  ): Promise<void> {
+    const client = await this.getClient();
+    await client.sendFile(chatId, {
+      file: photoPath,
+      caption,
+      workers: 2
+    });
+  }
 }

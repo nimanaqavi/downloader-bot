@@ -4,7 +4,7 @@ import type { DownloadRecord } from "../../types/index.js";
 interface DownloadRow {
   id: number;
   user_id: number;
-  instagram_url: string;
+  url: string;
   status: "success" | "failed";
   file_size_bytes: number | null;
   created_at: string;
@@ -15,7 +15,7 @@ export class DownloadsRepository {
 
   create(userId: number, url: string, status: "success" | "failed", fileSize?: number): void {
     this.db.prepare(`
-      INSERT INTO downloads (user_id, instagram_url, status, file_size_bytes) VALUES (?, ?, ?, ?)
+      INSERT INTO downloads (user_id, url, status, file_size_bytes) VALUES (?, ?, ?, ?)
     `).run(userId, url, status, fileSize ?? null);
   }
 
@@ -30,7 +30,7 @@ export class DownloadsRepository {
     return rows.map((row) => ({
       id: row.id,
       userId: row.user_id,
-      instagramUrl: row.instagram_url,
+      url: row.url,
       status: row.status,
       fileSizeBytes: row.file_size_bytes,
       createdAt: row.created_at

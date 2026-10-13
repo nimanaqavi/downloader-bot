@@ -5,14 +5,14 @@ import type { DownloadQueue } from "../../services/downloadQueue.js";
 import type { Downloader, VideoQuality } from "../../services/downloader.js";
 import type { MtprotoUploader } from "../../services/mtprotoUploader.js";
 import type { RateLimiter } from "../../services/rateLimiter.js";
-import type { BotContext } from "../../types/index.js";
+import type { BotContext, DownloadResult } from "../../types/index.js";
 import { removeDirectory } from "../../utils/files.js";
-import { parseMediaUrl } from "../../utils/mediaUrl.js";
+import { parseMediaUrl, type ParsedMediaUrl } from "../../utils/mediaUrl.js";
 import { friendlyDownloadError } from "../../utils/telegramErrors.js";
 import { mainReplyKeyboard } from "./start.js";
 
-// Pending YouTube download selections (User ID -> URL)
-const pendingSelection = new Map<number, { url: string; timestamp: number }>();
+// Pending download selections (User ID -> ParsedMediaUrl)
+const pendingSelection = new Map<number, { parsed: ParsedMediaUrl; timestamp: number }>();
 
 function cleanupPending(): void {
   const now = Date.now();
@@ -37,10 +37,10 @@ export function registerDownloadHandler(
       return;
     }
 
-    const media = parseMediaUrl(text);
+    const media = await parseMediaUrl(text);
     if (!media) {
       await ctx.reply(
-        "لطفاً یک لینک معتبر از اینستاگرام یا یوتیوب ارسال کنید. 📥",
+        "لطفاً یک لینک اینترنتی معتبر (از یوتیوب، اینستاگرام، تیک‌تاک، توییتر و ...) ارسال کنید. 📥",
         mainReplyKeyboard
       );
       return;
@@ -48,17 +48,25 @@ export function registerDownloadHandler(
 
     const rate = rateLimiter.consume(String(ctx.from.id));
     if (!rate.allowed) {
-      await ctx.reply(`تعداد درخواست‌ها بیش از حد مجاز است. لطفاً پس از ${rate.retryAfterSeconds} ثانیه دوباره تلاش کنید.`);
+      await ctx.reply(
+        `تعداد درخواست‌ها بیش از حد مجاز است. لطفاً پس از ${rate.retryAfterSeconds} ثانیه دوباره تلاش کنید.`
+      );
       return;
     }
 
-    // For YouTube (all videos & shorts), ask user to select quality
+    // Direct audio request via "mp3 <url>"
+    if (media.isAudioRequested) {
+      await executeDownload(ctx, media, "audio", downloads, downloader, downloadQueue, mtprotoUploader);
+      return;
+    }
+
+    // For YouTube: present quality selector
     if (media.platform === "youtube") {
       cleanupPending();
-      pendingSelection.set(ctx.from.id, { url: media.url, timestamp: Date.now() });
+      pendingSelection.set(ctx.from.id, { parsed: media, timestamp: Date.now() });
 
       await ctx.reply(
-        "🎬 **کیفیت و فرمت دانلود را انتخاب کنید:**",
+        `🎬 **انتخاب کیفیت دانلود (${media.platformName}):**`,
         Markup.inlineKeyboard([
           [
             Markup.button.callback("🎬 720p (عالی)", "q_720p"),
@@ -74,11 +82,17 @@ export function registerDownloadHandler(
       return;
     }
 
-    // For Instagram, execute direct optimized download via queue
-    await executeDownload(ctx, media.url, "compact", downloads, downloader, downloadQueue, mtprotoUploader);
+    // For Instagram: handle single post or carousel
+    if (media.platform === "instagram") {
+      await executeInstagramDownload(ctx, media, downloads, downloader, downloadQueue, mtprotoUploader);
+      return;
+    }
+
+    // For all other platforms: automatic best single file <= 720p
+    await executeDownload(ctx, media, "compact", downloads, downloader, downloadQueue, mtprotoUploader);
   });
 
-  // Handle Quality Selection Callbacks
+  // Handle Quality Selection Callbacks (for YouTube)
   const handleQualityChoice = (quality: VideoQuality) => async (ctx: any) => {
     await ctx.answerCbQuery();
     const userId = ctx.from.id;
@@ -91,7 +105,16 @@ export function registerDownloadHandler(
 
     pendingSelection.delete(userId);
     await ctx.editMessageText("در حال اضافه شدن به صف پردازش... ⏳");
-    await executeDownload(ctx, pending.url, quality, downloads, downloader, downloadQueue, mtprotoUploader, ctx.callbackQuery.message.message_id);
+    await executeDownload(
+      ctx,
+      pending.parsed,
+      quality,
+      downloads,
+      downloader,
+      downloadQueue,
+      mtprotoUploader,
+      ctx.callbackQuery.message.message_id
+    );
   };
 
   bot.action("q_720p", handleQualityChoice("720p"));
@@ -110,9 +133,82 @@ export function registerDownloadHandler(
   });
 }
 
+/**
+ * Executes download and upload for Instagram, including carousel support up to 10 items.
+ * Processes and sends one item at a time, immediately unlinking each file to respect disk limits.
+ */
+async function executeInstagramDownload(
+  ctx: any,
+  media: ParsedMediaUrl,
+  downloads: DownloadsRepository,
+  downloader: Downloader,
+  downloadQueue: DownloadQueue,
+  mtprotoUploader?: MtprotoUploader
+): Promise<void> {
+  const status = await ctx.reply("در حال بررسی پست اینستاگرام... ⏳");
+  const statusMsgId = status.message_id;
+
+  try {
+    let sentCount = 0;
+    // Process items one by one (up to 10 items)
+    for (let itemIndex = 1; itemIndex <= 10; itemIndex++) {
+      let tempDirectory: string | undefined;
+      try {
+        const result = await downloadQueue.add(async () => {
+          if (itemIndex === 1) {
+            await ctx.telegram
+              .editMessageText(
+                ctx.chat.id,
+                statusMsgId,
+                undefined,
+                "در حال دانلود از اینستاگرام... ⚡️"
+              )
+              .catch(() => undefined);
+          }
+          return await downloader.download(media.url, "compact", {
+            isInstagramCarousel: true,
+            playlistItem: itemIndex
+          });
+        });
+
+        tempDirectory = result.tempDirectory;
+        const caption =
+          itemIndex > 1
+            ? `📸 [${media.platformName}] آیتم شماره ${itemIndex}\n@mimo_downloader_bot`
+            : `🎬 [${media.platformName}] دریافت شد.\n@mimo_downloader_bot`;
+
+        await sendMediaToUser(ctx, result, caption, mtprotoUploader);
+        sentCount++;
+      } catch (itemErr: any) {
+        // If first item failed, rethrow to surface error.
+        // If subsequent items fail, it means no more carousel items exist.
+        if (itemIndex === 1) throw itemErr;
+        break;
+      } finally {
+        if (tempDirectory) {
+          await removeDirectory(tempDirectory).catch(() => undefined);
+        }
+      }
+    }
+
+    downloads.create(ctx.dbUser!.id, media.url, "success");
+    await ctx.telegram.deleteMessage(ctx.chat.id, statusMsgId).catch(() => undefined);
+  } catch (error) {
+    downloads.create(ctx.dbUser!.id, media.url, "failed");
+    const errMessage = friendlyDownloadError(error);
+    await ctx.telegram
+      .editMessageText(ctx.chat.id, statusMsgId, undefined, `❌ خطا در دانلود:\n${errMessage}`)
+      .catch(() => ctx.reply(`❌ خطا در دانلود:\n${errMessage}`));
+    console.error(`[download instagram] ${ctx.from.id} ${media.url}:`, error);
+  }
+}
+
+/**
+ * Standard single download and upload pipeline for any platform.
+ */
 async function executeDownload(
   ctx: any,
-  url: string,
+  media: ParsedMediaUrl,
   quality: VideoQuality,
   downloads: DownloadsRepository,
   downloader: Downloader,
@@ -124,7 +220,7 @@ async function executeDownload(
   if (!statusMsgId) {
     const queueMsg = downloadQueue.waitingCount > 0 ? ` (نفر ${downloadQueue.waitingCount} در صف)` : "";
     const status = await ctx.reply(
-      `در حال بررسی و آماده‌سازی${queueMsg}... ⏳`,
+      `در حال اتصال به ${media.platformName}${queueMsg}... ⏳`,
       Markup.inlineKeyboard([[Markup.button.callback("لغو عملیات ❌", "cancel_download")]])
     );
     statusMsgId = status.message_id;
@@ -138,70 +234,35 @@ async function executeDownload(
           ctx.chat.id,
           statusMsgId,
           undefined,
-          "در حال دانلود و پردازش با نهایت سرعت... ⚡️",
+          `در حال دانلود از ${media.platformName} با بیشترین سرعت... ⚡️`,
           Markup.inlineKeyboard([[Markup.button.callback("لغو عملیات ❌", "cancel_download")]])
         )
         .catch(() => undefined);
 
-      return await downloader.download(url, quality);
+      return await downloader.download(media.url, quality);
     });
 
     tempDirectory = result.tempDirectory;
 
-    await ctx.telegram.editMessageText(
-      ctx.chat.id,
-      statusMsgId,
-      undefined,
-      "در حال ارسال فایل به تلگرام... 📤",
-      Markup.inlineKeyboard([[Markup.button.callback("وضعیت: آماده ✅", "status_ready")]])
-    );
+    await ctx.telegram
+      .editMessageText(
+        ctx.chat.id,
+        statusMsgId,
+        undefined,
+        "در حال ارسال فایل به تلگرام... 📤",
+        Markup.inlineKeyboard([[Markup.button.callback("وضعیت: آماده ✅", "status_ready")]])
+      )
+      .catch(() => undefined);
 
-    const caption = result.isAudio
-      ? "🎵 فایل صوتی با موفقیت دریافت شد.\n@mimo_downloader_bot"
-      : "🎬 ویدیو با موفقیت دانلود شد.\n@mimo_downloader_bot";
+    const icon = result.mediaType === "audio" ? "🎵" : result.mediaType === "photo" ? "🖼" : "🎬";
+    const caption = `${icon} [${media.platformName}] با موفقیت دانلود شد.\n@mimo_downloader_bot`;
 
-    // ALWAYS use high-speed 16-worker MTProto Uploader if available
-    if (mtprotoUploader) {
-      try {
-        if (result.isAudio) {
-          await mtprotoUploader.sendAudio(ctx.chat.id, result.videoPath, caption, result.thumbnailPath);
-        } else {
-          await mtprotoUploader.sendVideo(ctx.chat.id, result.videoPath, caption, result.thumbnailPath);
-        }
-      } catch (uploadErr) {
-        console.warn("[upload] MTProto upload failed, falling back to HTTP Bot API:", uploadErr);
-        if (result.isAudio) {
-          await ctx.replyWithAudio(Input.fromLocalFile(result.videoPath), {
-            ...(result.thumbnailPath ? { thumbnail: Input.fromLocalFile(result.thumbnailPath) } : {}),
-            caption
-          });
-        } else {
-          await ctx.replyWithVideo(Input.fromLocalFile(result.videoPath), {
-            ...(result.thumbnailPath ? { thumbnail: Input.fromLocalFile(result.thumbnailPath) } : {}),
-            supports_streaming: true,
-            caption
-          });
-        }
-      }
-    } else {
-      if (result.isAudio) {
-        await ctx.replyWithAudio(Input.fromLocalFile(result.videoPath), {
-          ...(result.thumbnailPath ? { thumbnail: Input.fromLocalFile(result.thumbnailPath) } : {}),
-          caption
-        });
-      } else {
-        await ctx.replyWithVideo(Input.fromLocalFile(result.videoPath), {
-          ...(result.thumbnailPath ? { thumbnail: Input.fromLocalFile(result.thumbnailPath) } : {}),
-          supports_streaming: true,
-          caption
-        });
-      }
-    }
+    await sendMediaToUser(ctx, result, caption, mtprotoUploader);
 
-    downloads.create(ctx.dbUser!.id, url, "success", result.fileSizeBytes);
+    downloads.create(ctx.dbUser!.id, media.url, "success", result.fileSizeBytes);
     await ctx.telegram.deleteMessage(ctx.chat.id, statusMsgId).catch(() => undefined);
   } catch (error) {
-    downloads.create(ctx.dbUser!.id, url, "failed");
+    downloads.create(ctx.dbUser!.id, media.url, "failed");
     const errMessage = friendlyDownloadError(error);
     await ctx.telegram
       .editMessageText(
@@ -212,10 +273,53 @@ async function executeDownload(
         Markup.inlineKeyboard([[Markup.button.callback("راهنمایی ℹ️", "btn_help")]])
       )
       .catch(() => ctx.reply(`❌ خطا در دانلود:\n${errMessage}`));
-    console.error(`[download] ${ctx.from.id} ${url}:`, error);
+    console.error(`[download] ${ctx.from.id} ${media.url}:`, error);
   } finally {
     if (tempDirectory) {
       await removeDirectory(tempDirectory).catch(() => undefined);
     }
+  }
+}
+
+/**
+ * Sends downloaded media (video, audio, or photo) via MTProto or HTTP fallback.
+ */
+async function sendMediaToUser(
+  ctx: any,
+  result: DownloadResult,
+  caption: string,
+  mtprotoUploader?: MtprotoUploader
+): Promise<void> {
+  if (mtprotoUploader) {
+    try {
+      if (result.mediaType === "audio") {
+        await mtprotoUploader.sendAudio(ctx.chat.id, result.mediaPath, caption, result.thumbnailPath);
+      } else if (result.mediaType === "photo") {
+        await mtprotoUploader.sendPhoto(ctx.chat.id, result.mediaPath, caption);
+      } else {
+        await mtprotoUploader.sendVideo(ctx.chat.id, result.mediaPath, caption, result.thumbnailPath);
+      }
+      return;
+    } catch (uploadErr) {
+      console.warn("[upload] MTProto upload failed, falling back to HTTP Bot API:", uploadErr);
+    }
+  }
+
+  // Telegraf HTTP Fallback
+  if (result.mediaType === "audio") {
+    await ctx.replyWithAudio(Input.fromLocalFile(result.mediaPath), {
+      ...(result.thumbnailPath ? { thumbnail: Input.fromLocalFile(result.thumbnailPath) } : {}),
+      caption
+    });
+  } else if (result.mediaType === "photo") {
+    await ctx.replyWithPhoto(Input.fromLocalFile(result.mediaPath), {
+      caption
+    });
+  } else {
+    await ctx.replyWithVideo(Input.fromLocalFile(result.mediaPath), {
+      ...(result.thumbnailPath ? { thumbnail: Input.fromLocalFile(result.thumbnailPath) } : {}),
+      supports_streaming: true,
+      caption
+    });
   }
 }

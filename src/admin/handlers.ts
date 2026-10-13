@@ -69,7 +69,7 @@ export function registerAdminHandlers(
     const safePage = Math.min(page, pages - 1);
     const history = downloads.listForUser(userId, safePage, HISTORY_SIZE);
     const historyText = history.length
-      ? history.map((item) => `${item.status === "success" ? "OK" : "FAILED"} | ${formatDate(item.createdAt)}\n${item.instagramUrl}`).join("\n\n")
+      ? history.map((item) => `${item.status === "success" ? "OK" : "FAILED"} | ${formatDate(item.createdAt)}\n${item.url}`).join("\n\n")
       : "No downloads.";
     const text = [
       `${displayName(user)} (${user.telegramId})`,
