@@ -35,3 +35,21 @@ export async function verifyRuntimeDependencies(autoUpdateYtDlp: boolean): Promi
     }
   }
 }
+
+export function scheduleNightlyYtDlpUpdate(enabled: boolean): NodeJS.Timeout | null {
+  if (!enabled) return null;
+
+  const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+  const timer = setInterval(async () => {
+    console.info("[nightly] Running scheduled yt-dlp update...");
+    try {
+      const result = await runProcess("yt-dlp", ["-U"], 120_000);
+      console.info(`[nightly] yt-dlp update: ${result.stdout.trim() || "already up to date"}`);
+    } catch (err) {
+      console.warn("[nightly] Scheduled yt-dlp update encountered an error:", err);
+    }
+  }, TWENTY_FOUR_HOURS_MS);
+
+  timer.unref();
+  return timer;
+}

@@ -1,128 +1,236 @@
 import { existsSync } from "node:fs";
 import { mkdtemp, readdir, stat } from "node:fs/promises";
-import { tmpdir, homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import type { DownloadResult } from "../types/index.js";
+import type { DownloadResult, MediaType } from "../types/index.js";
+import { calculateSafeDownloadCap } from "../utils/disk.js";
 import { removeDirectory } from "../utils/files.js";
 import { runProcess } from "./process.js";
 
 const imageExtensions = new Set(["jpg", "jpeg", "png", "webp"]);
-const mediaExtensions = new Set(["mp4", "mkv", "webm", "mov", "mp3", "m4a"]);
+const videoExtensions = new Set(["mp4", "mkv", "webm", "mov"]);
+const audioExtensions = new Set(["mp3", "m4a", "aac", "opus", "flac", "ogg"]);
 
 export type VideoQuality = "720p" | "480p" | "360p" | "audio" | "compact" | "best";
 
-export async function safeUpdateYtDlp(): Promise<void> {
-  try {
-    const pythonCmd = process.platform === "win32" ? "python" : "python3";
-    const { stdout } = await runProcess(pythonCmd, ["-m", "pip", "install", "--upgrade", "yt-dlp"], 120_000);
-    console.info("[yt-dlp update] stdout:", stdout.trim());
-  } catch (err) {
-    console.warn("[yt-dlp update] Failed to update safely:", err);
-  }
+export interface DownloaderOptions {
+  timeoutMs: number;
+  maxFileSizeBytes: number;
+  cookiesPath?: string;
+  maxDurationSeconds?: number;
+  diskSafetyMarginBytes?: number;
 }
 
-export class Downloader {
-  constructor(
-    private readonly timeoutMs: number,
-    private readonly maxFileSizeBytes: number,
-    private readonly cookiesPath?: string
-  ) {}
+export interface BuildArgsOptions {
+  url: string;
+  quality: VideoQuality;
+  tempDirectory: string;
+  maxDurationSeconds: number;
+  safeCapBytes: number;
+  cookiesPath?: string;
+  playlistItem?: number;
+  isAudio: boolean;
+  isYouTube: boolean;
+}
 
-  async download(url: string, quality: VideoQuality = "compact"): Promise<DownloadResult & { tempDirectory: string; isAudio?: boolean }> {
-    const tempDirectory = await mkdtemp(join(tmpdir(), "media-bot-"));
-    const isAudio = quality === "audio";
+export function buildYtDlpArgs(options: BuildArgsOptions): string[] {
+  let sortRule = "res:720,ext:mp4:m4a";
+  let formatRule = "b[height<=?720][ext=mp4]/b[height<=?720]/bv*[height<=?720]+ba/b";
 
-    let sortRule = "res:720,ext:mp4:m4a";
-    let formatRule = "bv*[height<=?720]+ba/b[height<=?720]/bv*[width<=?720]+ba/b[width<=?720]/bv*+ba/b";
-
-    if (quality === "360p") {
+  if (options.isYouTube) {
+    if (options.quality === "360p") {
       sortRule = "res:360,ext:mp4:m4a";
       formatRule = "bv*[height<=?360]+ba/b[height<=?360]/bv*[width<=?360]+ba/b[width<=?360]/b";
-    } else if (quality === "480p") {
+    } else if (options.quality === "480p") {
       sortRule = "res:480,ext:mp4:m4a";
-      formatRule = "bv*[height<=?480]+ba/b[height<=?480]/bv*[width<=?480]+ba/b[width<=?480]/bv*[height<=?360]+ba/b[height<=?360]";
-    } else if (quality === "720p" || quality === "compact") {
+      formatRule =
+        "bv*[height<=?480]+ba/b[height<=?480]/bv*[width<=?480]+ba/b[width<=?480]/bv*[height<=?360]+ba/b[height<=?360]";
+    } else if (options.quality === "720p" || options.quality === "compact") {
       sortRule = "res:720,ext:mp4:m4a";
       formatRule = "bv*[height<=?720]+ba/b[height<=?720]/bv*[width<=?720]+ba/b[width<=?720]/bv*+ba/b";
-    } else if (quality === "best") {
+    } else if (options.quality === "best") {
       sortRule = "res,ext:mp4:m4a";
       formatRule = "bv*+ba/b";
     }
+  }
 
-    const args: string[] = [
-      "--force-ipv4",
-      "--no-playlist",
-      "--no-warnings",
-      "--no-mtime",
-      "--no-cache-dir",
-      "--socket-timeout",
-      "30",
-      "--format-sort",
-      sortRule,
-      "--write-thumbnail",
-      "--convert-thumbnails",
-      "jpg"
-    ];
+  const args: string[] = [
+    "--force-ipv4",
+    "--no-warnings",
+    "--no-mtime",
+    "--no-cache-dir",
+    "--socket-timeout",
+    "30",
+    "--max-duration",
+    String(options.maxDurationSeconds),
+    "--max-filesize",
+    `${Math.floor(options.safeCapBytes)}`,
+    "--no-live-from-start",
+    "--format-sort",
+    sortRule
+  ];
 
-    if (isAudio) {
-      args.push(
-        "-x",
-        "--audio-format",
-        "mp3",
-        "--output",
-        join(tempDirectory, "audio.%(ext)s")
-      );
-    } else {
-      args.push(
-        "--merge-output-format",
-        "mp4",
-        "--format",
-        formatRule,
-        "--output",
-        join(tempDirectory, "media.%(ext)s")
-      );
+  if (options.playlistItem) {
+    args.push("--playlist-items", String(options.playlistItem));
+  } else {
+    args.push("--no-playlist");
+  }
+
+  if (options.isAudio) {
+    args.push(
+      "-x",
+      "--audio-format",
+      "mp3",
+      "--output",
+      join(options.tempDirectory, "audio.%(ext)s")
+    );
+  } else {
+    args.push(
+      "--remux-video",
+      "mp4",
+      "--format",
+      formatRule,
+      "--output",
+      join(options.tempDirectory, "media.%(ext)s")
+    );
+  }
+
+  args.push("--write-thumbnail", "--convert-thumbnails", "jpg");
+
+  const homeDir = homedir();
+  const binDir = join(homeDir, "bin");
+  const ffmpegName = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
+  if (existsSync(join(binDir, ffmpegName))) {
+    args.push("--ffmpeg-location", binDir);
+  }
+
+  if (options.cookiesPath && existsSync(options.cookiesPath)) {
+    args.push("--cookies", options.cookiesPath);
+  }
+
+  args.push(options.url);
+  return args;
+}
+
+export class Downloader {
+  private readonly timeoutMs: number;
+  private readonly maxFileSizeBytes: number;
+  private readonly cookiesPath?: string;
+  private readonly maxDurationSeconds: number;
+  private readonly diskSafetyMarginBytes: number;
+
+  constructor(
+    timeoutMs: number,
+    maxFileSizeBytes: number,
+    cookiesPath?: string,
+    maxDurationSeconds: number = 10800,
+    diskSafetyMarginBytes: number = 100 * 1024 * 1024
+  ) {
+    this.timeoutMs = timeoutMs;
+    this.maxFileSizeBytes = maxFileSizeBytes;
+    this.cookiesPath = cookiesPath;
+    this.maxDurationSeconds = maxDurationSeconds;
+    this.diskSafetyMarginBytes = diskSafetyMarginBytes;
+  }
+
+  async download(
+    url: string,
+    quality: VideoQuality = "compact",
+    options?: { isInstagramCarousel?: boolean; playlistItem?: number }
+  ): Promise<DownloadResult & { tempDirectory: string; isAudio?: boolean }> {
+    const isAudio = quality === "audio";
+    const isYouTube = /(?:youtube\.com|youtu\.be)/i.test(url);
+    const isMergeNeeded = isYouTube && !isAudio;
+
+    // Check actual free disk space dynamically before executing download
+    const capCheck = await calculateSafeDownloadCap({
+      isMergeNeeded,
+      configuredMaxBytes: this.maxFileSizeBytes,
+      safetyMarginBytes: this.diskSafetyMarginBytes
+    });
+
+    if (!capCheck.allowed) {
+      throw new Error(capCheck.reason || "فضای کافی روی دیسک سرور موجود نیست.");
     }
 
-    const homeDir = homedir();
-    const binDir = join(homeDir, "bin");
-    const ffmpegName = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
-    if (existsSync(join(binDir, ffmpegName))) {
-      args.push("--ffmpeg-location", binDir);
-    }
+    const tempDirectory = await mkdtemp(join(tmpdir(), "media-bot-"));
 
-    if (this.cookiesPath) args.push("--cookies", this.cookiesPath);
-    args.push(url);
+    const args = buildYtDlpArgs({
+      url,
+      quality,
+      tempDirectory,
+      maxDurationSeconds: this.maxDurationSeconds,
+      safeCapBytes: capCheck.safeCapBytes,
+      cookiesPath: this.cookiesPath,
+      playlistItem: options?.playlistItem,
+      isAudio,
+      isYouTube
+    });
 
     try {
-      await runProcess("yt-dlp", args, this.timeoutMs);
+      const processResult = await runProcess("yt-dlp", args, this.timeoutMs);
       const files = await readdir(tempDirectory);
 
-      const targetFile = files.find((name) =>
-        mediaExtensions.has(name.split(".").pop()?.toLowerCase() ?? "")
+      // Identify downloaded files
+      const videoFile = files.find((name) =>
+        videoExtensions.has(name.split(".").pop()?.toLowerCase() ?? "")
       );
-      if (!targetFile) throw new Error("فایل مدیا پس از دانلود ایجاد نشد. لطفاً از عمومی بودن ویدیو مطمئن شوید.");
-
-      const filePath = join(tempDirectory, targetFile);
-      const fileSizeBytes = (await stat(filePath)).size;
-
-      if (fileSizeBytes > this.maxFileSizeBytes) {
-        const sizeMb = Math.round(fileSizeBytes / 1048576);
-        const maxMb = Math.round(this.maxFileSizeBytes / 1048576);
-        throw new Error(
-          `حجم ویدیو (${sizeMb} مگابایت) بیشتر از سقف ${maxMb} مگابایت مجاز ربات است. لطفاً کیفیت پایین‌تر یا نسخه صوتی را انتخاب کنید.`
-        );
-      }
-
-      const thumbnailName = files.find((name) =>
+      const audioFile = files.find((name) =>
+        audioExtensions.has(name.split(".").pop()?.toLowerCase() ?? "")
+      );
+      const imageFiles = files.filter((name) =>
         imageExtensions.has(name.split(".").pop()?.toLowerCase() ?? "")
       );
 
+      let mediaFile: string | undefined;
+      let mediaType: MediaType = "video";
+
+      if (videoFile) {
+        mediaFile = videoFile;
+        mediaType = "video";
+      } else if (audioFile) {
+        mediaFile = audioFile;
+        mediaType = "audio";
+      } else if (imageFiles.length > 0) {
+        // Pure image / photo post (e.g. Instagram photo, tweet image)
+        mediaFile = imageFiles[0];
+        mediaType = "photo";
+      }
+
+      if (!mediaFile) {
+        throw new Error(
+          "فایل مدیا پس از دانلود ایجاد نشد. لطفاً از عمومی و در دسترس بودن محتوا مطمئن شوید."
+        );
+      }
+
+      const filePath = join(tempDirectory, mediaFile);
+      const fileSizeBytes = (await stat(filePath)).size;
+
+      if (fileSizeBytes > capCheck.safeCapBytes) {
+        const sizeMb = Math.round(fileSizeBytes / 1048576);
+        const maxMb = Math.round(capCheck.safeCapBytes / 1048576);
+        throw new Error(
+          `حجم فایل (${sizeMb} مگابایت) بیشتر از سقف مجاز (${maxMb} مگابایت) است.`
+        );
+      }
+
+      // Thumbnail identification (only for video/audio)
+      let thumbnailPath: string | undefined;
+      if (mediaType !== "photo") {
+        const thumbName = imageFiles.find((name) => name !== mediaFile);
+        if (thumbName) {
+          thumbnailPath = join(tempDirectory, thumbName);
+        }
+      }
+
       return {
         tempDirectory,
+        mediaPath: filePath,
         videoPath: filePath,
-        thumbnailPath: thumbnailName ? join(tempDirectory, thumbnailName) : undefined,
+        mediaType,
+        thumbnailPath,
         fileSizeBytes,
-        isAudio
+        isAudio: mediaType === "audio"
       };
     } catch (error) {
       await removeDirectory(tempDirectory);

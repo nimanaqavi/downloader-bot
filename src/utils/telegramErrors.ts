@@ -1,27 +1,38 @@
 export function friendlyDownloadError(error: unknown): string {
   if (error instanceof Error) {
     const msg = error.message;
-    if (msg.includes("سقف") || msg.includes("بیشتر از سقف")) {
+    if (msg.includes("سقف") || msg.includes("بیشتر از سقف") || msg.includes("فضای خالی")) {
       return msg;
     }
     const lower = msg.toLowerCase();
-    if (lower.includes("max-filesize") || lower.includes("file is larger")) {
-      return "حجم ویدیو بیشتر از سقف مجاز ربات (۵۰۰ مگابایت) است. لطفاً کیفیت پایین‌تر یا نسخه صوتی را انتخاب کنید.";
+    if (lower.includes("max-filesize") || lower.includes("file is larger") || lower.includes("larger than max-filesize")) {
+      return "حجم فایل بیشتر از سقف مجاز سرور است. لطفاً کیفیت پایین‌تر یا نسخه صوتی را انتخاب کنید.";
     }
     if (lower.includes("max-duration") || lower.includes("longer than max-duration")) {
-      return "مدت زمان ویدیو بیشتر از حد مجاز (۲۰ دقیقه) است.";
+      return "مدت زمان محتوا بیشتر از حد مجاز (حداکثر ۳ ساعت) است.";
     }
     if (lower.includes("format not available") || lower.includes("requested format")) {
-      return "کیفیت انتخاب شده برای این ویدیو در دسترس نبود. لطفاً کیفیت دیگری (مثلاً 480p یا 720p) را انتخاب کنید.";
+      return "فرمت یا کیفیت درخواستی برای این لینک در دسترس نیست.";
+    }
+    if (lower.includes("login required") || lower.includes("checkpoint_required") || lower.includes("login to instagram")) {
+      return "این محتوا نیازمند ورود به حساب اینستاگرام است یا اکانت مورد نظر خصوصی (Private) می‌باشد.";
     }
     if (lower.includes("sign in to confirm") || lower.includes("bot")) {
-      return "یوتیوب موقتاً دسترسی را محدود کرده است. لطفاً چند دقیقه بعد مجدداً تلاش کنید.";
+      return "سرویس‌دهنده موقتاً دسترسی را مسدود کرده است. لطفاً چند دقیقه بعد مجدداً تلاش کنید.";
     }
     if (lower.includes("timeout") || lower.includes("timed out")) {
-      return "زمان پردازش یا دانلود بیش از حد طول کشید (Timeout). لطفاً کیفیت پایین‌تر را انتخاب کنید.";
+      return "زمان پردازش یا دانلود بیش از حد طول کشید (Timeout). لطفاً مجدداً امتحان کنید.";
     }
-    if (lower.includes("private video") || lower.includes("this video is private") || lower.includes("login required") || lower.includes("members-only")) {
-      return "این ویدیو خصوصی یا مخصوص اعضا است و امکان دانلود آن وجود ندارد.";
+    if (
+      lower.includes("private video") ||
+      lower.includes("this video is private") ||
+      lower.includes("members-only") ||
+      lower.includes("post is private")
+    ) {
+      return "این محتوا خصوصی، مخصوص اعضا یا ناموجود است و امکان دانلود آن وجود ندارد.";
+    }
+    if (lower.includes("unsupported url") || lower.includes("no video formats found")) {
+      return "این وب‌سایت یا لینک توسط دانلودر پشتیبانی نمی‌شود یا محتوای ویدیویی/صوتی در آن یافت نشد.";
     }
 
     // Clean up long yt-dlp error output for display
@@ -29,5 +40,5 @@ export function friendlyDownloadError(error: unknown): string {
     const shortDetails = cleanMsg.split("\n").pop() || cleanMsg;
     return shortDetails;
   }
-  return "خطا در پردازش و دانلود ویدیو. لطفاً لینک را بررسی کرده و مجدداً امتحان کنید.";
+  return "خطا در پردازش و دانلود مدیا. لطفاً از عمومی و سالم بودن لینک مطمئن شده و مجدداً امتحان کنید.";
 }

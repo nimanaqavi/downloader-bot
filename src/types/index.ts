@@ -20,7 +20,7 @@ export interface UserListItem extends User {
 export interface DownloadRecord {
   id: number;
   userId: number;
-  instagramUrl: string;
+  url: string;
   status: "success" | "failed";
   fileSizeBytes: number | null;
   createdAt: string;
@@ -41,9 +41,15 @@ export interface GlobalStats {
   failedDownloads: number;
 }
 
+export type MediaType = "video" | "audio" | "photo";
+
 export interface DownloadResult {
-  videoPath: string;
+  mediaPath: string;
+  videoPath: string; // Backwards compatibility alias for mediaPath
+  mediaType: MediaType;
   thumbnailPath?: string;
   fileSizeBytes: number;
   title?: string;
+  platformName?: string;
+  appliedQuality?: string;
 }
