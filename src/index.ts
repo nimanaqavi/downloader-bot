@@ -2,6 +2,7 @@ import http from "node:http";
 import { createBot } from "./bot/createBot.js";
 import { config } from "./config.js";
 import { createDatabase } from "./database/client.js";
+import { CacheRepository } from "./database/repositories/cache.js";
 import { DownloadsRepository } from "./database/repositories/downloads.js";
 import { UsersRepository } from "./database/repositories/users.js";
 import { scheduleNightlyYtDlpUpdate, verifyRuntimeDependencies } from "./services/dependencies.js";
@@ -29,6 +30,7 @@ async function main(): Promise<void> {
   const db = createDatabase(config.databasePath);
   const users = new UsersRepository(db);
   const downloads = new DownloadsRepository(db);
+  const cache = new CacheRepository(db);
 
   const mtprotoUploader = new MtprotoUploader(
     config.telegramApiId,
@@ -41,6 +43,7 @@ async function main(): Promise<void> {
     adminIds: config.adminUserIds,
     users,
     downloads,
+    cache,
     downloader: new Downloader(
       config.downloadTimeoutMs,
       config.telegramFileLimitBytes,

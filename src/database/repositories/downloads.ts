@@ -13,10 +13,24 @@ interface DownloadRow {
 export class DownloadsRepository {
   constructor(private readonly db: Database.Database) {}
 
-  create(userId: number, url: string, status: "success" | "failed", fileSize?: number): void {
-    this.db.prepare(`
+  create(userId: number, url: string, status: "success" | "failed", fileSize?: number): number {
+    const info = this.db.prepare(`
       INSERT INTO downloads (user_id, url, status, file_size_bytes) VALUES (?, ?, ?, ?)
     `).run(userId, url, status, fileSize ?? null);
+    return Number(info.lastInsertRowid);
+  }
+
+  findById(id: number): DownloadRecord | undefined {
+    const row = this.db.prepare(`SELECT * FROM downloads WHERE id = ?`).get(id) as DownloadRow | undefined;
+    if (!row) return undefined;
+    return {
+      id: row.id,
+      userId: row.user_id,
+      url: row.url,
+      status: row.status,
+      fileSizeBytes: row.file_size_bytes,
+      createdAt: row.created_at
+    };
   }
 
   countForUser(userId: number): number {

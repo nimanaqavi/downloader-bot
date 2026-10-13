@@ -112,6 +112,13 @@ export function buildYtDlpArgs(options: BuildArgsOptions): string[] {
   return args;
 }
 
+export interface MediaMetadata {
+  title: string;
+  duration?: number;
+  uploader?: string;
+  filesizeApprox?: number;
+}
+
 export class Downloader {
   private readonly timeoutMs: number;
   private readonly maxFileSizeBytes: number;
@@ -157,6 +164,42 @@ export class Downloader {
       return 1;
     } catch {
       return 1;
+    }
+  }
+
+  async fetchMetadata(url: string): Promise<MediaMetadata> {
+    const args = [
+      "--force-ipv4",
+      "--no-warnings",
+      "--no-playlist",
+      "--print",
+      "%(title)s\t%(duration)s\t%(uploader)s\t%(filesize,filesize_approx)s"
+    ];
+    if (this.cookiesPath && existsSync(this.cookiesPath)) {
+      args.push("--cookies", this.cookiesPath);
+    }
+    args.push(url);
+
+    try {
+      const { stdout } = await runProcess("yt-dlp", args, 25_000);
+      const firstLine = stdout.trim().split("\n")[0] || "";
+      const parts = firstLine.split("\t");
+      const title = parts[0]?.trim() || "مدیا";
+      const duration = parts[1] && !isNaN(Number(parts[1])) ? Number(parts[1]) : undefined;
+      const uploader = parts[2]?.trim() || undefined;
+      const rawSize = parts[3]?.trim();
+      const filesizeApprox = rawSize && !isNaN(Number(rawSize)) ? Number(rawSize) : undefined;
+
+      return {
+        title,
+        duration,
+        uploader,
+        filesizeApprox
+      };
+    } catch {
+      return {
+        title: "مدیا"
+      };
     }
   }
 
