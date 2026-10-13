@@ -136,6 +136,30 @@ export class Downloader {
     this.maxDiskBudgetMb = maxDiskBudgetMb;
   }
 
+  async getMediaItemCount(url: string): Promise<number> {
+    const args = [
+      "--force-ipv4",
+      "--no-warnings",
+      "--flat-playlist",
+      "-J"
+    ];
+    if (this.cookiesPath && existsSync(this.cookiesPath)) {
+      args.push("--cookies", this.cookiesPath);
+    }
+    args.push(url);
+
+    try {
+      const { stdout } = await runProcess("yt-dlp", args, 20_000);
+      const json = JSON.parse(stdout);
+      if (json._type === "playlist" && Array.isArray(json.entries)) {
+        return Math.max(1, json.entries.length);
+      }
+      return 1;
+    } catch {
+      return 1;
+    }
+  }
+
   async download(
     url: string,
     quality: VideoQuality = "compact",

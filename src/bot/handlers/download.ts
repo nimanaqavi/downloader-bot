@@ -149,22 +149,42 @@ async function executeInstagramDownload(
   const statusMsgId = status.message_id;
 
   try {
-    let sentCount = 0;
-    // Process items one by one (up to 10 items)
-    for (let itemIndex = 1; itemIndex <= 10; itemIndex++) {
+    // 1. Detect if post is a single item or a carousel with multiple items
+    const itemCount = await downloader.getMediaItemCount(media.url);
+
+    if (itemCount <= 1) {
+      // Single post or reel: download exactly once
+      await ctx.telegram
+        .editMessageText(ctx.chat.id, statusMsgId, undefined, "در حال دانلود از اینستاگرام... ⚡️")
+        .catch(() => undefined);
+      await executeDownload(
+        ctx,
+        media,
+        "compact",
+        downloads,
+        downloader,
+        downloadQueue,
+        mtprotoUploader,
+        statusMsgId
+      );
+      return;
+    }
+
+    // 2. Carousel with multiple items (process up to 10 items one by one)
+    const totalToDownload = Math.min(itemCount, 10);
+    await ctx.telegram
+      .editMessageText(
+        ctx.chat.id,
+        statusMsgId,
+        undefined,
+        `📸 آلبوم اینستاگرام شامل ${totalToDownload} آیتم شناسایی شد.\nدر حال پردازش و ارسال تک‌تک... ⏳`
+      )
+      .catch(() => undefined);
+
+    for (let itemIndex = 1; itemIndex <= totalToDownload; itemIndex++) {
       let tempDirectory: string | undefined;
       try {
         const result = await downloadQueue.add(async () => {
-          if (itemIndex === 1) {
-            await ctx.telegram
-              .editMessageText(
-                ctx.chat.id,
-                statusMsgId,
-                undefined,
-                "در حال دانلود از اینستاگرام... ⚡️"
-              )
-              .catch(() => undefined);
-          }
           return await downloader.download(media.url, "compact", {
             isInstagramCarousel: true,
             playlistItem: itemIndex
@@ -172,16 +192,12 @@ async function executeInstagramDownload(
         });
 
         tempDirectory = result.tempDirectory;
-        const caption =
-          itemIndex > 1
-            ? `📸 [${media.platformName}] آیتم شماره ${itemIndex}\n@mimo_downloader_bot`
-            : `🎬 [${media.platformName}] دریافت شد.\n@mimo_downloader_bot`;
+        const icon = result.mediaType === "photo" ? "🖼" : "🎬";
+        const caption = `${icon} [اینستاگرام] آیتم ${itemIndex} از ${totalToDownload}\n@mimo_downloader_bot`;
 
         await sendMediaToUser(ctx, result, caption, mtprotoUploader);
-        sentCount++;
       } catch (itemErr: any) {
-        // If first item failed, rethrow to surface error.
-        // If subsequent items fail, it means no more carousel items exist.
+        console.warn(`[instagram carousel] item ${itemIndex} failed:`, itemErr);
         if (itemIndex === 1) throw itemErr;
         break;
       } finally {
