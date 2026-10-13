@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+data/*.db
+data/*.db-*
+coverage/
+*.log
+.DS_Store
+scripts/askpass.*
+*.bat
+.claude/
+*.tar.gz
+*.bak

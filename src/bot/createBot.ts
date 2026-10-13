@@ -1,0 +1,41 @@
+import { Telegraf } from "telegraf";
+import { BroadcastManager } from "../admin/broadcast.js";
+import { registerAdminHandlers } from "../admin/handlers.js";
+import type { DownloadsRepository } from "../database/repositories/downloads.js";
+import type { UsersRepository } from "../database/repositories/users.js";
+import { DownloadQueue } from "../services/downloadQueue.js";
+import type { Downloader } from "../services/downloader.js";
+import type { MtprotoUploader } from "../services/mtprotoUploader.js";
+import type { RateLimiter } from "../services/rateLimiter.js";
+import type { BotContext } from "../types/index.js";
+import { registerDownloadHandler } from "./handlers/download.js";
+import { registerStartHandler } from "./handlers/start.js";
+import { registerUser } from "./middleware/registerUser.js";
+import { requireNotBanned } from "./middleware/requireNotBanned.js";
+
+interface BotDependencies {
+  token: string;
+  adminIds: Set<string>;
+  users: UsersRepository;
+  downloads: DownloadsRepository;
+  downloader: Downloader;
+  rateLimiter: RateLimiter;
+  mtprotoUploader: MtprotoUploader;
+}
+
+export function createBot(dependencies: BotDependencies): Telegraf<BotContext> {
+  const bot = new Telegraf<BotContext>(dependencies.token);
+  const broadcasts = new BroadcastManager(bot, dependencies.users, dependencies.adminIds);
+  const downloadQueue = new DownloadQueue(1);
+
+  bot.use(registerUser(dependencies.users));
+  bot.use(requireNotBanned(dependencies.adminIds));
+  bot.use(broadcasts.middleware());
+  registerStartHandler(bot);
+  registerAdminHandlers(bot, dependencies.users, dependencies.downloads, dependencies.adminIds, broadcasts);
+  registerDownloadHandler(bot, dependencies.downloads, dependencies.downloader, dependencies.rateLimiter, downloadQueue, dependencies.mtprotoUploader);
+  bot.catch((error, ctx) => {
+    console.error(`[bot] Unhandled update ${ctx.update.update_id}:`, error);
+  });
+  return bot;
+}
