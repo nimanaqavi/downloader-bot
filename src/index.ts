@@ -46,7 +46,8 @@ async function main(): Promise<void> {
       config.telegramFileLimitBytes,
       config.instagramCookiesPath,
       config.maxDurationSeconds,
-      config.diskSafetyMarginBytes
+      config.diskSafetyMarginBytes,
+      config.maxDiskBudgetMb
     ),
     rateLimiter: new RateLimiter(config.rateLimitMax, config.rateLimitWindowMs),
     mtprotoUploader

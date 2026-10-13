@@ -118,19 +118,22 @@ export class Downloader {
   private readonly cookiesPath?: string;
   private readonly maxDurationSeconds: number;
   private readonly diskSafetyMarginBytes: number;
+  private readonly maxDiskBudgetMb?: number;
 
   constructor(
     timeoutMs: number,
     maxFileSizeBytes: number,
     cookiesPath?: string,
     maxDurationSeconds: number = 10800,
-    diskSafetyMarginBytes: number = 100 * 1024 * 1024
+    diskSafetyMarginBytes: number = 100 * 1024 * 1024,
+    maxDiskBudgetMb?: number
   ) {
     this.timeoutMs = timeoutMs;
     this.maxFileSizeBytes = maxFileSizeBytes;
     this.cookiesPath = cookiesPath;
     this.maxDurationSeconds = maxDurationSeconds;
     this.diskSafetyMarginBytes = diskSafetyMarginBytes;
+    this.maxDiskBudgetMb = maxDiskBudgetMb;
   }
 
   async download(
@@ -146,7 +149,8 @@ export class Downloader {
     const capCheck = await calculateSafeDownloadCap({
       isMergeNeeded,
       configuredMaxBytes: this.maxFileSizeBytes,
-      safetyMarginBytes: this.diskSafetyMarginBytes
+      safetyMarginBytes: this.diskSafetyMarginBytes,
+      maxDiskBudgetMb: this.maxDiskBudgetMb
     });
 
     if (!capCheck.allowed) {
