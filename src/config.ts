@@ -18,7 +18,9 @@ const schema = z.object({
   TELEGRAM_API_HASH: z.string().default("00000000000000000000000000000000"),
   DOWNLOAD_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(300),
   AUTO_UPDATE_YTDLP: booleanString,
-  INSTAGRAM_COOKIES_PATH: z.string().optional()
+  INSTAGRAM_COOKIES_PATH: z.string().optional(),
+  MAX_DURATION_SECONDS: z.coerce.number().int().positive().default(10800),
+  DISK_SAFETY_MARGIN_MB: z.coerce.number().int().positive().default(100)
 });
 
 const parsed = schema.safeParse(process.env);
@@ -48,5 +50,7 @@ export const config = {
   autoUpdateYtDlp: parsed.data.AUTO_UPDATE_YTDLP,
   instagramCookiesPath: parsed.data.INSTAGRAM_COOKIES_PATH
     ? resolve(parsed.data.INSTAGRAM_COOKIES_PATH)
-    : undefined
+    : undefined,
+  maxDurationSeconds: parsed.data.MAX_DURATION_SECONDS,
+  diskSafetyMarginBytes: parsed.data.DISK_SAFETY_MARGIN_MB * 1024 * 1024
 };
