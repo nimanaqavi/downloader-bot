@@ -1,3 +1,5 @@
+import { renderPlatformEmojiHtml } from "./platformEmoji.js";
+
 export function escapeHtml(str: string): string {
   if (!str) return "";
   return str
@@ -56,12 +58,41 @@ export function truncateText(text: string, maxLength: number): string {
   return text.slice(0, maxLength - 1) + "…";
 }
 
+export function buildQualityCardText(opts: {
+  platform: string;
+  platformName: string;
+  platformEmojiHtml: string;
+  title: string;
+  durationSeconds?: number;
+  lang: "fa" | "en";
+}): string {
+  const isYt = opts.platform === "youtube";
+  const durationLabel = opts.lang === "en" ? "Duration" : "مدت";
+  const durationPart =
+    opts.durationSeconds && opts.durationSeconds > 0
+      ? ` │ ⏱ ${durationLabel}: <code>${formatDuration(opts.durationSeconds)}</code>`
+      : "";
+
+  if (isYt) {
+    // For YouTube quality card, title is omitted per specification
+    return `<blockquote>${opts.platformEmojiHtml} YouTube${durationPart}</blockquote>`;
+  }
+
+  // Other platforms retain title and source blockquote
+  return [
+    `<b>${isolate(escapeHtml(truncateText(opts.title, 80)))}</b>`,
+    `<blockquote>${opts.platformEmojiHtml} ${opts.platformName}${durationPart}</blockquote>`
+  ].join("\n");
+}
+
 export function buildFinalCaption(opts: {
   title: string;
   author?: string;
   durationSeconds?: number;
   fileSizeBytes: number;
   platformName: string;
+  platformEmoji?: string;
+  customEmojiId?: string;
   botUsername: string;
   isAudio?: boolean;
   lang?: "fa" | "en";
@@ -90,7 +121,9 @@ export function buildFinalCaption(opts: {
       ? `⏱ ${durationLabel}: <code>${formatDuration(opts.durationSeconds)}</code> │ `
       : "";
   const sizePart = `💾 ${sizeLabel}: <code>${formatBytes(opts.fileSizeBytes, lang)}</code>`;
-  const statsBlock = `<blockquote>${durationPart}${sizePart}\n🌐 ${opts.platformName}</blockquote>`;
+
+  const emoji = opts.platformEmoji || renderPlatformEmojiHtml(opts.platformName, opts.customEmojiId);
+  const statsBlock = `<blockquote>${durationPart}${sizePart}\n${emoji} ${opts.platformName}</blockquote>`;
 
   let caption = [titleLine, authorLine, statsBlock, `🤖 @${opts.botUsername}`].filter(Boolean).join("\n");
 

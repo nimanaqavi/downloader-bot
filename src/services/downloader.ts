@@ -124,6 +124,7 @@ export interface MediaMetadata {
   author?: string;
   uploader?: string;
   filesizeApprox?: number;
+  thumbnailUrl?: string;
 }
 
 export class Downloader {
@@ -186,7 +187,7 @@ export class Downloader {
       "--no-warnings",
       "--no-playlist",
       "--print",
-      "%(title)s\t%(duration)s\t%(artist,creator,uploader,channel)s\t%(filesize,filesize_approx)s"
+      "%(title)s\t%(duration)s\t%(artist,creator,uploader,channel)s\t%(filesize,filesize_approx)s\t%(thumbnail)s\t%(id)s"
     ];
     if (this.cookiesPath && existsSync(this.cookiesPath)) {
       args.push("--cookies", this.cookiesPath);
@@ -203,13 +204,21 @@ export class Downloader {
       const author = rawAuthor && rawAuthor !== "NA" ? rawAuthor : undefined;
       const rawSize = parts[3]?.trim();
       const filesizeApprox = rawSize && !isNaN(Number(rawSize)) ? Number(rawSize) : undefined;
+      let thumbnailUrl = parts[4]?.trim() || undefined;
+      const videoId = parts[5]?.trim();
+
+      // For YouTube, ensure standard medium thumbnail (480x360) is available
+      if ((!thumbnailUrl || !thumbnailUrl.startsWith("https://")) && videoId) {
+        thumbnailUrl = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+      }
 
       const meta: MediaMetadata = {
         title,
         duration,
         author,
         uploader: author,
-        filesizeApprox
+        filesizeApprox,
+        thumbnailUrl
       };
 
       this.metadataCache.set(url, { meta, timestamp: Date.now() });
