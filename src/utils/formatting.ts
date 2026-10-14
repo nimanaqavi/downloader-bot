@@ -27,16 +27,19 @@ export function formatDuration(seconds?: number): string {
   return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
 }
 
-export function formatBytes(bytes?: number | null): string {
+export function formatBytes(bytes?: number | null, lang: "fa" | "en" = "fa"): string {
   if (!bytes || bytes <= 0 || isNaN(bytes)) return "";
   const mb = bytes / (1024 * 1024);
   if (mb < 1) {
-    return `${Math.round(bytes / 1024)} KB`;
+    const kb = Math.round(bytes / 1024);
+    return lang === "en" ? `${kb} KB` : `${kb} کیلوبایت`;
   }
   if (mb >= 1000) {
-    return `${(mb / 1024).toFixed(1)} GB`;
+    const gb = (mb / 1024).toFixed(1);
+    return lang === "en" ? `${gb} GB` : `${gb} گیگابایت`;
   }
-  return `${Math.round(mb)} MB`;
+  const roundedMb = Math.round(mb * 10) / 10;
+  return lang === "en" ? `${roundedMb} MB` : `${roundedMb} مگابایت`;
 }
 
 export function renderProgressBar(percentage: number): string {
@@ -79,12 +82,15 @@ export function buildFinalCaption(opts: {
     }
   }
 
+  const durationLabel = lang === "en" ? "Duration" : "مدت";
+  const sizeLabel = lang === "en" ? "Size" : "حجم";
+
   const durationPart =
     opts.durationSeconds && opts.durationSeconds > 0
-      ? `⏱ مدت: <code>${formatDuration(opts.durationSeconds)}</code> │ `
+      ? `⏱ ${durationLabel}: <code>${formatDuration(opts.durationSeconds)}</code> │ `
       : "";
-  const sizePart = `💾 حجم: <code>${formatBytes(opts.fileSizeBytes)}</code>`;
-  const statsBlock = `<blockquote>${durationPart}${sizePart} │ 🌐 ${opts.platformName}</blockquote>`;
+  const sizePart = `💾 ${sizeLabel}: <code>${formatBytes(opts.fileSizeBytes, lang)}</code>`;
+  const statsBlock = `<blockquote>${durationPart}${sizePart}\n🌐 ${opts.platformName}</blockquote>`;
 
   let caption = [titleLine, authorLine, statsBlock, `🤖 @${opts.botUsername}`].filter(Boolean).join("\n");
 

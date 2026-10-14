@@ -39,21 +39,11 @@ export function createBot(dependencies: BotDependencies): Telegraf<BotContext> {
   bot.use(requireNotBanned(dependencies.adminIds));
   bot.use(broadcasts.middleware());
 
-  const processPendingLink = registerDownloadHandler(
-    bot,
-    dependencies.downloads,
-    dependencies.downloader,
-    dependencies.rateLimiter,
-    downloadQueue,
-    dependencies.mtprotoUploader,
-    dependencies.cache,
-    forceJoin,
-    dependencies.adminIds,
-    dependencies.users
-  );
+  // 1. Register commands first so /start, /help, /history, /language, /admin are caught immediately
+  let processPendingLink: ((ctx: any, lang: any, url: string) => Promise<void>) | undefined;
 
   registerStartHandler(bot, dependencies.users, async (ctx, lang, pendingLink) => {
-    if (pendingLink) {
+    if (pendingLink && processPendingLink) {
       await processPendingLink(ctx, lang, pendingLink);
     }
   });
@@ -68,6 +58,20 @@ export function createBot(dependencies: BotDependencies): Telegraf<BotContext> {
     dependencies.cache,
     dependencies.settings,
     downloadQueue
+  );
+
+  // 2. Register link download handler for non-command text
+  processPendingLink = registerDownloadHandler(
+    bot,
+    dependencies.downloads,
+    dependencies.downloader,
+    dependencies.rateLimiter,
+    downloadQueue,
+    dependencies.mtprotoUploader,
+    dependencies.cache,
+    forceJoin,
+    dependencies.adminIds,
+    dependencies.users
   );
 
   bot.catch((error, ctx) => {

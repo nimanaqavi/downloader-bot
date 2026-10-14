@@ -22,9 +22,10 @@ describe("UI Formatting Helpers", () => {
   });
 
   it("formats file sizes cleanly", () => {
-    assert.equal(formatBytes(500 * 1024), "500 KB");
-    assert.equal(formatBytes(15 * 1024 * 1024), "15 MB");
-    assert.equal(formatBytes(1500 * 1024 * 1024), "1.5 GB");
+    assert.equal(formatBytes(500 * 1024, "fa"), "500 کیلوبایت");
+    assert.equal(formatBytes(15 * 1024 * 1024, "fa"), "15 مگابایت");
+    assert.equal(formatBytes(15 * 1024 * 1024, "en"), "15 MB");
+    assert.equal(formatBytes(1500 * 1024 * 1024, "en"), "1.5 GB");
   });
 
   it("renders 10-block progress bar with numbers in brackets", () => {

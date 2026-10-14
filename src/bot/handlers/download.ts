@@ -202,9 +202,9 @@ export function registerDownloadHandler(
       .catch(() => undefined);
   };
 
-  bot.on(message("text"), async (ctx) => {
+  bot.on(message("text"), async (ctx, next) => {
     const text = ctx.message.text.trim();
-    if (text.startsWith("/")) return;
+    if (text.startsWith("/")) return next();
     await handleLinkInput(ctx, text);
   });
 
