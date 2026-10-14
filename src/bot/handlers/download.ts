@@ -5,6 +5,7 @@ import { adminErrorAlerts } from "../../admin/errorAlerts.js";
 import { config } from "../../config.js";
 import type { CacheRepository } from "../../database/repositories/cache.js";
 import type { DownloadsRepository } from "../../database/repositories/downloads.js";
+import type { SettingsRepository } from "../../database/repositories/settings.js";
 import type { UsersRepository } from "../../database/repositories/users.js";
 import { t, type Language } from "../../i18n/index.js";
 import type { DownloadQueue } from "../../services/downloadQueue.js";
@@ -13,12 +14,13 @@ import type { ForceJoinService } from "../../services/forceJoin.js";
 import { metricsManager } from "../../services/metrics.js";
 import type { MtprotoUploader } from "../../services/mtprotoUploader.js";
 import type { RateLimiter } from "../../services/rateLimiter.js";
-import { resolveSpotifyTrack } from "../../services/spotify.js";
+import { resolveSpotifyTrack, SpotifyError } from "../../services/spotify.js";
 import { downloadTikTokViaTikWm } from "../../services/tiktok.js";
 import type { BotContext, DownloadResult } from "../../types/index.js";
 import { removeDirectory } from "../../utils/files.js";
 import {
   buildFinalCaption,
+  buildQualityCardText,
   escapeHtml,
   formatBytes,
   formatDuration,
@@ -26,6 +28,7 @@ import {
   truncateText
 } from "../../utils/formatting.js";
 import { parseMediaUrl, type ParsedMediaUrl } from "../../utils/mediaUrl.js";
+import { validateSafeUrl } from "../../utils/ssrf.js";
 import { friendlyDownloadError, generateErrorId } from "../../utils/telegramErrors.js";
 import { safeEditMessageText } from "../../utils/throttler.js";
 import { normalizeMediaUrl } from "../../utils/urlNormalizer.js";
@@ -36,11 +39,13 @@ interface PendingSelection {
   url: string;
   urlNormalized: string;
   platformName: string;
+  platform: string;
   title: string;
   author?: string;
   duration?: number;
   filesizeApprox?: number;
   statusMsgId: number;
+  isPhotoCard?: boolean;
   timestamp: number;
   lang: Language;
 }
@@ -66,7 +71,8 @@ export function registerDownloadHandler(
   cache: CacheRepository,
   forceJoin: ForceJoinService,
   adminIds: Set<string>,
-  users: UsersRepository
+  users: UsersRepository,
+  settings: SettingsRepository
 ): (ctx: any, lang: Language, url: string) => Promise<void> {
   const handleLinkInput = async (ctx: any, rawUrl: string) => {
     if (!ctx.from) return;
@@ -113,13 +119,13 @@ export function registerDownloadHandler(
 
     // 4. Handle Spotify
     if (media.platform === "spotify") {
-      await handleSpotify(ctx, bot, adminIds, media, urlNormalized, downloads, downloader, downloadQueue, mtprotoUploader, cache, userLang);
+      await handleSpotify(ctx, bot, adminIds, media, urlNormalized, downloads, downloader, downloadQueue, mtprotoUploader, cache, userLang, settings);
       return;
     }
 
     // 5. Direct audio request via "mp3 <url>"
     if (media.isAudioRequested) {
-      await handleDirectAudio(ctx, bot, adminIds, media, urlNormalized, downloads, downloader, downloadQueue, mtprotoUploader, cache, userLang);
+      await handleDirectAudio(ctx, bot, adminIds, media, urlNormalized, downloads, downloader, downloadQueue, mtprotoUploader, cache, userLang, settings);
       return;
     }
 
@@ -140,7 +146,8 @@ export function registerDownloadHandler(
         downloadQueue,
         mtprotoUploader,
         cache,
-        userLang
+        userLang,
+        settings
       );
       return;
     }
@@ -159,7 +166,8 @@ export function registerDownloadHandler(
         downloadQueue,
         mtprotoUploader,
         cache,
-        userLang
+        userLang,
+        settings
       );
       return;
     }
@@ -169,37 +177,67 @@ export function registerDownloadHandler(
     const meta = await downloader.fetchMetadata(media.url);
     const token = crypto.randomBytes(4).toString("hex");
 
+    const isYt = media.platform === "youtube";
+    const platformEmojiHtml = settings.getPlatformEmojiHtml(media.platform);
+
+    const cardText = buildQualityCardText({
+      platform: media.platform,
+      platformName: media.platformName,
+      platformEmojiHtml,
+      title: meta.title,
+      durationSeconds: meta.duration,
+      lang: userLang
+    });
+
+    const keyboard = buildQualityKeyboard(token, media.platform, urlNormalized, cache, userLang);
+
+    let activeStatusMsgId = statusMsg.message_id;
+    let isPhotoCard = false;
+
+    // For YouTube: attempt to send a photo message with medium resolution thumbnail
+    if (isYt && meta.thumbnailUrl && meta.thumbnailUrl.startsWith("https://")) {
+      const ssrfCheck = await validateSafeUrl(meta.thumbnailUrl);
+      if (ssrfCheck.valid) {
+        try {
+          const photoMsg = await ctx.replyWithPhoto(meta.thumbnailUrl, {
+            caption: cardText,
+            parse_mode: "HTML",
+            ...keyboard
+          });
+          // Delete initial checking status message
+          await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => undefined);
+          activeStatusMsgId = photoMsg.message_id;
+          isPhotoCard = true;
+        } catch (photoErr) {
+          console.warn("[youtube card] Failed to send thumbnail photo, falling back to text:", photoErr);
+        }
+      }
+    }
+
+    if (!isPhotoCard) {
+      await ctx.telegram
+        .editMessageText(ctx.chat.id, statusMsg.message_id, undefined, cardText, {
+          parse_mode: "HTML",
+          ...keyboard
+        })
+        .catch(() => undefined);
+    }
+
     pendingSelections.set(token, {
       userId: ctx.from.id,
       url: media.url,
       urlNormalized,
       platformName: media.platformName,
+      platform: media.platform,
       title: meta.title,
       author: meta.author || meta.uploader,
       duration: meta.duration,
       filesizeApprox: meta.filesizeApprox,
-      statusMsgId: statusMsg.message_id,
+      statusMsgId: activeStatusMsgId,
+      isPhotoCard,
       timestamp: Date.now(),
       lang: userLang
     });
-
-    const durationBlock = meta.duration && meta.duration > 0
-      ? ` │ ${t(userLang, "duration_label")}: <code>${formatDuration(meta.duration)}</code>`
-      : "";
-
-    const cardText = [
-      `<b>${escapeHtml(truncateText(meta.title, 80))}</b>`,
-      `<blockquote>${t(userLang, "source_label")}: ${media.platformName}${durationBlock}</blockquote>`
-    ].join("\n");
-
-    const keyboard = buildQualityKeyboard(token, media.platform, urlNormalized, cache, userLang);
-
-    await ctx.telegram
-      .editMessageText(ctx.chat.id, statusMsg.message_id, undefined, cardText, {
-        parse_mode: "HTML",
-        ...keyboard
-      })
-      .catch(() => undefined);
   };
 
   bot.on(message("text"), async (ctx, next) => {
@@ -253,6 +291,13 @@ export function registerDownloadHandler(
     if (pending.userId !== ctx.from.id) return;
     pendingSelections.delete(token);
 
+    // If it was a photo card, delete the photo message and send a fresh text message for progress
+    if (pending.isPhotoCard) {
+      await ctx.deleteMessage().catch(() => undefined);
+      const newStatus = await ctx.reply(t(userLang, "checking_link"), { parse_mode: "HTML" });
+      pending.statusMsgId = newStatus.message_id;
+    }
+
     await executePipeline({
       ctx,
       bot,
@@ -260,6 +305,7 @@ export function registerDownloadHandler(
       url: pending.url,
       urlNormalized: pending.urlNormalized,
       platformName: pending.platformName,
+      platformKey: pending.platform,
       title: pending.title,
       author: pending.author,
       duration: pending.duration,
@@ -270,6 +316,7 @@ export function registerDownloadHandler(
       downloadQueue,
       mtprotoUploader,
       cache,
+      settings,
       lang: pending.lang
     });
   });
@@ -292,11 +339,13 @@ export function registerDownloadHandler(
 
     if (cached && ctx.chat) {
       try {
+        const platformEmoji = settings.getPlatformEmojiHtml(record.platform || "generic");
         const caption = buildFinalCaption({
           title: cached.title || "Audio",
           durationSeconds: cached.durationSeconds ?? undefined,
           fileSizeBytes: cached.fileSizeBytes || 0,
           platformName: "MP3",
+          platformEmoji,
           botUsername: config.botUsername,
           isAudio: true,
           lang: userLang
@@ -320,6 +369,7 @@ export function registerDownloadHandler(
       url: record.url,
       urlNormalized,
       platformName: "صوت",
+      platformKey: "generic",
       quality: "audio",
       statusMsgId: statusMsg.message_id,
       downloads,
@@ -327,6 +377,7 @@ export function registerDownloadHandler(
       downloadQueue,
       mtprotoUploader,
       cache,
+      settings,
       lang: userLang
     });
   });
@@ -395,8 +446,10 @@ async function handleSpotify(
   downloadQueue: DownloadQueue,
   mtprotoUploader: MtprotoUploader,
   cache: CacheRepository,
-  lang: Language
+  lang: Language,
+  settings: SettingsRepository
 ): Promise<void> {
+  const platformEmoji = settings.getPlatformEmojiHtml("spotify");
   const cached = cache.find(urlNormalized, "audio");
   if (cached) {
     try {
@@ -406,6 +459,7 @@ async function handleSpotify(
         durationSeconds: cached.durationSeconds ?? undefined,
         fileSizeBytes: cached.fileSizeBytes || 0,
         platformName: "Spotify",
+        platformEmoji,
         botUsername: config.botUsername,
         isAudio: true,
         lang
@@ -430,7 +484,7 @@ async function handleSpotify(
     }, ctx.from.id);
 
     if (!result) {
-      throw new Error("spotify_drm");
+      throw new SpotifyError("temporary_error", "Failed to resolve track");
     }
 
     const caption = buildFinalCaption({
@@ -439,6 +493,7 @@ async function handleSpotify(
       durationSeconds: result.durationSeconds,
       fileSizeBytes: result.fileSizeBytes,
       platformName: "Spotify",
+      platformEmoji,
       botUsername: config.botUsername,
       isAudio: true,
       lang
@@ -466,14 +521,28 @@ async function handleSpotify(
 
     await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => undefined);
     if (result.tempDirectory) await removeDirectory(result.tempDirectory).catch(() => undefined);
-  } catch {
+  } catch (error: any) {
     downloads.create(ctx.dbUser!.id, media.url, "failed", undefined, "Spotify");
-    await safeEditMessageText(
-      ctx.telegram,
-      ctx.chat.id,
-      statusMsg.message_id,
-      t(lang, "err_spotify_drm")
-    );
+    const errorId = generateErrorId();
+
+    let userErrorText = "";
+    if (error?.code === "unsupported_type") {
+      userErrorText = lang === "en"
+        ? "<blockquote>⚠️ Albums, playlists and podcasts are not supported. Please send a single track link!</blockquote>"
+        : "<blockquote>⚠️ لینک ارسالی مربوط به آلبوم، پلی‌لیست یا پادکست است. ربات در حال حاضر فقط از لینک تک‌آهنگ اسپاتیفای پشتیبانی می‌کند!</blockquote>";
+    } else if (error?.code === "track_not_found") {
+      userErrorText = lang === "en"
+        ? "<blockquote>⚠️ Track could not be found. Please check the song name or send a direct link!</blockquote>"
+        : "<blockquote>⚠️ آهنگ مورد نظر در منابع صوتی یافت نشد. لطفاً نام آهنگ را بررسی کرده یا لینک مستقیم بفرستید!</blockquote>";
+    } else {
+      userErrorText = lang === "en"
+        ? `<blockquote>⚠️ Temporary server error. Please try again in a few moments.\n<code>Error ID: ${errorId}</code></blockquote>`
+        : `<blockquote>⚠️ مشکل موقت در ارتباط با سرور. لطفاً چند لحظه دیگر دوباره تلاش کنید.\n<code>کد پیگیری: ${errorId}</code></blockquote>`;
+    }
+
+    await safeEditMessageText(ctx.telegram, ctx.chat.id, statusMsg.message_id, userErrorText);
+    adminErrorAlerts.reportPlatformError(bot, adminIds, "Spotify", errorId, error);
+    console.error(`[spotify error ${errorId}] ${ctx.from.id} ${media.url}:`, error?.message || error);
   }
 }
 
@@ -489,8 +558,10 @@ async function handleTikTok(
   downloadQueue: DownloadQueue,
   mtprotoUploader: MtprotoUploader,
   cache: CacheRepository,
-  lang: Language
+  lang: Language,
+  settings: SettingsRepository
 ): Promise<void> {
+  const platformEmoji = settings.getPlatformEmojiHtml("tiktok");
   const cached = cache.find(urlNormalized, "compact");
   if (cached) {
     try {
@@ -499,6 +570,7 @@ async function handleTikTok(
         durationSeconds: cached.durationSeconds ?? undefined,
         fileSizeBytes: cached.fileSizeBytes || 0,
         platformName: "TikTok",
+        platformEmoji,
         botUsername: config.botUsername,
         isAudio: false,
         lang
@@ -534,6 +606,7 @@ async function handleTikTok(
           durationSeconds: result.durationSeconds,
           fileSizeBytes: result.fileSizeBytes,
           platformName: "TikTok",
+          platformEmoji,
           botUsername: config.botUsername,
           isAudio: false,
           lang
@@ -574,6 +647,7 @@ async function handleTikTok(
     url: media.url,
     urlNormalized,
     platformName: "TikTok",
+    platformKey: "tiktok",
     quality: "compact",
     statusMsgId,
     downloads,
@@ -581,6 +655,7 @@ async function handleTikTok(
     downloadQueue,
     mtprotoUploader,
     cache,
+    settings,
     lang
   });
 }
@@ -596,8 +671,10 @@ async function handleDirectAudio(
   downloadQueue: DownloadQueue,
   mtprotoUploader: MtprotoUploader,
   cache: CacheRepository,
-  lang: Language
+  lang: Language,
+  settings: SettingsRepository
 ): Promise<void> {
+  const platformEmoji = settings.getPlatformEmojiHtml(media.platform);
   const cached = cache.find(urlNormalized, "audio");
   if (cached) {
     try {
@@ -606,6 +683,7 @@ async function handleDirectAudio(
         durationSeconds: cached.durationSeconds ?? undefined,
         fileSizeBytes: cached.fileSizeBytes || 0,
         platformName: media.platformName,
+        platformEmoji,
         botUsername: config.botUsername,
         isAudio: true,
         lang
@@ -630,6 +708,7 @@ async function handleDirectAudio(
     url: media.url,
     urlNormalized,
     platformName: media.platformName,
+    platformKey: media.platform,
     quality: "audio",
     statusMsgId: statusMsg.message_id,
     downloads,
@@ -637,6 +716,7 @@ async function handleDirectAudio(
     downloadQueue,
     mtprotoUploader,
     cache,
+    settings,
     lang
   });
 }
@@ -653,8 +733,10 @@ async function handleInstagramRequest(
   downloadQueue: DownloadQueue,
   mtprotoUploader: MtprotoUploader,
   cache: CacheRepository,
-  lang: Language
+  lang: Language,
+  settings: SettingsRepository
 ): Promise<void> {
+  const platformEmoji = settings.getPlatformEmojiHtml("instagram");
   const cached = cache.find(urlNormalized, "compact");
   if (cached) {
     try {
@@ -663,6 +745,7 @@ async function handleInstagramRequest(
         durationSeconds: cached.durationSeconds ?? undefined,
         fileSizeBytes: cached.fileSizeBytes || 0,
         platformName: "Instagram",
+        platformEmoji,
         botUsername: config.botUsername,
         isAudio: false,
         lang
@@ -693,6 +776,7 @@ async function handleInstagramRequest(
       url: media.url,
       urlNormalized,
       platformName: "Instagram",
+      platformKey: "instagram",
       quality: "compact",
       statusMsgId,
       downloads,
@@ -700,6 +784,7 @@ async function handleInstagramRequest(
       downloadQueue,
       mtprotoUploader,
       cache,
+      settings,
       lang
     });
     return;
@@ -729,6 +814,7 @@ async function handleInstagramRequest(
         durationSeconds: result.durationSeconds,
         fileSizeBytes: result.fileSizeBytes,
         platformName: "Instagram",
+        platformEmoji,
         botUsername: config.botUsername,
         isAudio: false,
         lang
@@ -757,6 +843,7 @@ interface PipelineOptions {
   url: string;
   urlNormalized: string;
   platformName: string;
+  platformKey?: string;
   title?: string;
   author?: string;
   duration?: number;
@@ -767,6 +854,7 @@ interface PipelineOptions {
   downloadQueue: DownloadQueue;
   mtprotoUploader: MtprotoUploader;
   cache: CacheRepository;
+  settings: SettingsRepository;
   lang: Language;
 }
 
@@ -778,6 +866,7 @@ async function executePipeline(opts: PipelineOptions): Promise<void> {
     url,
     urlNormalized,
     platformName,
+    platformKey,
     title,
     author,
     duration,
@@ -788,8 +877,11 @@ async function executePipeline(opts: PipelineOptions): Promise<void> {
     downloadQueue,
     mtprotoUploader,
     cache,
+    settings,
     lang
   } = opts;
+
+  const platformEmoji = settings.getPlatformEmojiHtml(platformKey || platformName);
 
   // 1. Check cache first with language-localized caption (Phase 1.5)
   const cached = cache.find(urlNormalized, quality);
@@ -805,6 +897,7 @@ async function executePipeline(opts: PipelineOptions): Promise<void> {
         durationSeconds: cached.durationSeconds ?? duration,
         fileSizeBytes: cached.fileSizeBytes || 0,
         platformName,
+        platformEmoji,
         botUsername: config.botUsername,
         isAudio,
         lang
@@ -879,6 +972,7 @@ async function executePipeline(opts: PipelineOptions): Promise<void> {
       durationSeconds: effectiveDuration,
       fileSizeBytes: result.fileSizeBytes,
       platformName,
+      platformEmoji,
       botUsername: config.botUsername,
       isAudio,
       lang

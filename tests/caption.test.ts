@@ -20,7 +20,7 @@ describe("Caption and Audio Metadata Builder", () => {
     assert.ok(caption.includes("👤 خواننده: ⁨Queen &amp; Freddie Mercury⁩"));
     assert.ok(caption.includes("⏱ مدت: <code>05:55</code>"));
     assert.ok(caption.includes("💾 حجم: <code>10 مگابایت</code>"));
-    assert.ok(caption.includes("🌐 SoundCloud"));
+    assert.ok(caption.includes("☁️ SoundCloud"));
     assert.ok(caption.includes("🤖 @mimo_bot"));
   });
 
@@ -40,7 +40,7 @@ describe("Caption and Audio Metadata Builder", () => {
     assert.ok(caption.includes("👤 Artist: ⁨Ed Sheeran⁩"));
     assert.ok(caption.includes("⏱ Duration: <code>03:53</code>"));
     assert.ok(caption.includes("💾 Size: <code>5 MB</code>"));
-    assert.ok(caption.includes("🌐 Spotify"));
+    assert.ok(caption.includes("🟢 Spotify"));
   });
 
   it("formats video caption with 🎬 and omits author when not provided", () => {
@@ -57,7 +57,7 @@ describe("Caption and Audio Metadata Builder", () => {
     assert.ok(caption.includes("Funny Cat Video"));
     assert.equal(caption.includes("👤"), false);
     assert.ok(caption.includes("⏱ مدت: <code>00:45</code>"));
-    assert.ok(caption.includes("🌐 TikTok"));
+    assert.ok(caption.includes("🎶 TikTok"));
   });
 
   it("completely omits duration line if duration is 0, undefined, or null", () => {
@@ -72,6 +72,7 @@ describe("Caption and Audio Metadata Builder", () => {
     assert.equal(caption.includes("⏱"), false);
     assert.equal(caption.includes("--:--"), false);
     assert.ok(caption.includes("💾 حجم: <code>5 مگابایت</code>"));
+    assert.ok(caption.includes("📸 Instagram"));
   });
 
   it("strictly enforces caption length ceiling under 1024 characters", () => {

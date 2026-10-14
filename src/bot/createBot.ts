@@ -48,7 +48,7 @@ export function createBot(dependencies: BotDependencies): Telegraf<BotContext> {
     }
   });
 
-  registerHistoryHandler(bot, dependencies.downloads, dependencies.users);
+  registerHistoryHandler(bot, dependencies.downloads, dependencies.users, dependencies.settings);
   registerAdminHandlers(
     bot,
     dependencies.users,
@@ -71,7 +71,8 @@ export function createBot(dependencies: BotDependencies): Telegraf<BotContext> {
     dependencies.cache,
     forceJoin,
     dependencies.adminIds,
-    dependencies.users
+    dependencies.users,
+    dependencies.settings
   );
 
   bot.catch((error, ctx) => {

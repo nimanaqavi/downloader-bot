@@ -271,6 +271,64 @@ export function registerAdminHandlers(
     await ctx.reply(`کاربر با آیدی <code>${tgId}</code> رفع مسدودیت شد.`, { parse_mode: "HTML" });
   });
 
+  // Custom Emoji Management Command for Admin
+  bot.command("setemoji", async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    const parts = ctx.message.text.split(/\s+/);
+    const platform = parts[1]?.toLowerCase().trim();
+
+    const validPlatforms = ["youtube", "instagram", "tiktok", "spotify", "soundcloud", "x", "twitter"];
+
+    if (!platform || !validPlatforms.includes(platform)) {
+      const currentList = ["youtube", "instagram", "tiktok", "spotify", "soundcloud", "x"]
+        .map((p) => {
+          const id = settings.getPlatformEmojiId(p);
+          const icon = settings.getPlatformEmojiHtml(p);
+          return `• <b>${p}</b>: ${icon} ${id ? `(ID: <code>${id}</code>)` : "(پیش‌فرض)"}`;
+        })
+        .join("\n");
+
+      await ctx.reply(
+        `<b>تنظیم Custom Emoji پلتفرم‌ها:</b>\n\n` +
+          `روش استفاده:\n` +
+          `<code>/setemoji &lt;platform&gt; &lt;ایموجی سفارشی یا ID&gt;</code>\n\n` +
+          `پلتفرم‌های معتبر:\n<code>youtube, instagram, tiktok, spotify, soundcloud, x</code>\n\n` +
+          `<b>وضعیت فعلی:</b>\n${currentList}`,
+        { parse_mode: "HTML" }
+      );
+      return;
+    }
+
+    let customEmojiId: string | undefined;
+    const entities = ctx.message.entities || [];
+    const customEmojiEntity = entities.find((e: any) => e.type === "custom_emoji" && (e as any).custom_emoji_id);
+
+    if (customEmojiEntity && (customEmojiEntity as any).custom_emoji_id) {
+      customEmojiId = (customEmojiEntity as any).custom_emoji_id;
+    } else if (parts[2] && /^\d+$/.test(parts[2].trim())) {
+      customEmojiId = parts[2].trim();
+    }
+
+    if (!customEmojiId) {
+      await ctx.reply(
+        `✕ لطفاً یک ایموجی پریمیوم سفارشی (Custom Emoji) یا آیدی عددی آن را همراه با دستور ارسال کنید:\n` +
+          `مثال: <code>/setemoji ${platform} &lt;emoji&gt;</code> یا <code>/setemoji ${platform} 5368324170671202286</code>`,
+        { parse_mode: "HTML" }
+      );
+      return;
+    }
+
+    const normPlatform = platform === "twitter" ? "x" : platform;
+    settings.setPlatformEmojiId(normPlatform, customEmojiId);
+
+    const rendered = settings.getPlatformEmojiHtml(normPlatform);
+    await ctx.reply(
+      `✓ ایموجی پلتفرم <b>${normPlatform}</b> با موفقیت تنظیم شد:\n` +
+        `نمایش: ${rendered}\nشناسه: <code>${customEmojiId}</code>`,
+      { parse_mode: "HTML" }
+    );
+  });
+
   // 6. User List & Pagination
   bot.action(/^adm:users:(\d+)$/, async (ctx) => {
     if (!isAdmin(ctx)) return;
