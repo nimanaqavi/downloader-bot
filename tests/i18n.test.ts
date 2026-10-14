@@ -90,7 +90,7 @@ describe("i18n Central Dictionary and Translation System", () => {
     // User 2 requests in English
     const captionEn = buildFinalCaption({ ...cachedItem, lang: "en", isAudio: true });
     assert.ok(captionEn.includes("👤 Artist: ⁨Queen⁩"));
-    assert.ok(captionEn.includes("⏱ مدت: <code>05:55</code>"));
+    assert.ok(captionEn.includes("⏱ Duration: <code>05:55</code>"));
     assert.equal(captionEn.includes("خواننده"), false);
   });
 });

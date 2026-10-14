@@ -35,7 +35,7 @@ export interface BuildArgsOptions {
 
 export function buildYtDlpArgs(options: BuildArgsOptions): string[] {
   let sortRule = "res:720,ext:mp4:m4a";
-  let formatRule = "b[height<=?720][ext=mp4]/b[height<=?720]/bv*[height<=?720]+ba/b";
+  let formatRule = "b[height<=?720][ext=mp4]/b[height<=?720]/bv*[height<=?720]+ba/bv*[width<=?720]+ba/b/best";
 
   if (options.isYouTube) {
     if (options.quality === "360p") {
