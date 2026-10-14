@@ -56,6 +56,25 @@ const migrations = [
       ALTER TABLE users ADD COLUMN language TEXT NOT NULL DEFAULT 'fa';
       ALTER TABLE downloads ADD COLUMN platform TEXT;
     `
+  },
+  {
+    version: 5,
+    sql: `
+      ALTER TABLE users ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0;
+      CREATE TABLE IF NOT EXISTS bot_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+      INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('force_join_enabled', 'false');
+      INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('force_join_channel', '');
+    `
+  },
+  {
+    version: 6,
+    sql: `
+      ALTER TABLE users ADD COLUMN lang_set INTEGER NOT NULL DEFAULT 0;
+      UPDATE users SET lang_set = 1 WHERE language IS NOT NULL AND language != '';
+    `
   }
 ];
 

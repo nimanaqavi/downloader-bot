@@ -3,9 +3,11 @@ import { BroadcastManager } from "../admin/broadcast.js";
 import { registerAdminHandlers } from "../admin/handlers.js";
 import type { CacheRepository } from "../database/repositories/cache.js";
 import type { DownloadsRepository } from "../database/repositories/downloads.js";
+import type { SettingsRepository } from "../database/repositories/settings.js";
 import type { UsersRepository } from "../database/repositories/users.js";
 import { DownloadQueue } from "../services/downloadQueue.js";
 import type { Downloader } from "../services/downloader.js";
+import { ForceJoinService } from "../services/forceJoin.js";
 import type { MtprotoUploader } from "../services/mtprotoUploader.js";
 import type { RateLimiter } from "../services/rateLimiter.js";
 import type { BotContext } from "../types/index.js";
@@ -21,6 +23,7 @@ interface BotDependencies {
   users: UsersRepository;
   downloads: DownloadsRepository;
   cache: CacheRepository;
+  settings: SettingsRepository;
   downloader: Downloader;
   rateLimiter: RateLimiter;
   mtprotoUploader: MtprotoUploader;
@@ -29,38 +32,42 @@ interface BotDependencies {
 export function createBot(dependencies: BotDependencies): Telegraf<BotContext> {
   const bot = new Telegraf<BotContext>(dependencies.token);
   const broadcasts = new BroadcastManager(bot, dependencies.users, dependencies.adminIds);
-  const downloadQueue = new DownloadQueue(1);
-
-  // Set Telegram bot menu commands
-  bot.telegram
-    .setMyCommands([
-      { command: "history", description: "📜 تاریخچه دانلودها" },
-      { command: "language", description: "🌐 تغییر زبان / Language" }
-    ])
-    .catch((err) => console.warn("[bot] setMyCommands failed:", err));
+  const downloadQueue = new DownloadQueue(1, 10, 1);
+  const forceJoin = new ForceJoinService(dependencies.settings);
 
   bot.use(registerUser(dependencies.users));
   bot.use(requireNotBanned(dependencies.adminIds));
   bot.use(broadcasts.middleware());
 
-  registerStartHandler(bot, dependencies.users);
-  registerHistoryHandler(bot, dependencies.downloads);
-  registerAdminHandlers(
-    bot,
-    dependencies.users,
-    dependencies.downloads,
-    dependencies.adminIds,
-    broadcasts,
-    dependencies.cache
-  );
-  registerDownloadHandler(
+  const processPendingLink = registerDownloadHandler(
     bot,
     dependencies.downloads,
     dependencies.downloader,
     dependencies.rateLimiter,
     downloadQueue,
     dependencies.mtprotoUploader,
-    dependencies.cache
+    dependencies.cache,
+    forceJoin,
+    dependencies.adminIds,
+    dependencies.users
+  );
+
+  registerStartHandler(bot, dependencies.users, async (ctx, lang, pendingLink) => {
+    if (pendingLink) {
+      await processPendingLink(ctx, lang, pendingLink);
+    }
+  });
+
+  registerHistoryHandler(bot, dependencies.downloads, dependencies.users);
+  registerAdminHandlers(
+    bot,
+    dependencies.users,
+    dependencies.downloads,
+    dependencies.adminIds,
+    broadcasts,
+    dependencies.cache,
+    dependencies.settings,
+    downloadQueue
   );
 
   bot.catch((error, ctx) => {

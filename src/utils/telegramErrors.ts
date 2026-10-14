@@ -1,36 +1,76 @@
-export function friendlyDownloadError(error: unknown): string {
+import crypto from "node:crypto";
+import { t, type Language } from "../i18n/index.js";
+
+export function generateErrorId(): string {
+  return "ERR-" + crypto.randomBytes(3).toString("hex").toUpperCase();
+}
+
+export function sanitizeLog(text: unknown, tokenToMask?: string): string {
+  if (!text) return "";
+  let str = typeof text === "string" ? text : text instanceof Error ? text.stack || text.message : String(text);
+
+  // Mask Telegram bot tokens: e.g. 123456789:ABCdef-ghIJK_...
+  str = str.replace(/bot\d+:[A-Za-z0-9_-]+/g, "bot[REDACTED_TOKEN]");
+  str = str.replace(/\d{8,11}:[A-Za-z0-9_-]{30,50}/g, "[REDACTED_TOKEN]");
+
+  if (tokenToMask) {
+    str = str.split(tokenToMask).join("[REDACTED_TOKEN]");
+  }
+
+  return str;
+}
+
+export function friendlyDownloadError(
+  error: unknown,
+  errorId?: string,
+  lang: Language = "fa"
+): string {
+  const errId = errorId || generateErrorId();
+  const selectedLang = lang === "en" ? "en" : "fa";
+
   if (error instanceof Error) {
     const msg = error.message;
     const lower = msg.toLowerCase();
 
     if (msg.includes("سقف") || msg.includes("بیشتر از سقف") || msg.includes("فضای خالی")) {
-      return msg;
+      return `${msg}\n<code>${selectedLang === "en" ? "Error ID" : "کد پیگیری"}: ${errId}</code>`;
     }
     if (lower.includes("max-filesize") || lower.includes("file is larger")) {
-      return "حجم این فایل بیشتر از سقف مجاز سرور است. لطفاً کیفیت پایین‌تر یا نسخه صوتی را انتخاب کنید.";
+      return t(selectedLang, "err_max_size", errId);
     }
-    if (lower.includes("duration") || lower.includes("longer than") || lower.includes("does not pass filter")) {
-      return "مدت زمان این ویدیو بیشتر از حد مجاز است یا در حال پخش زنده (Live) می‌باشد.";
+    if (
+      lower.includes("duration") ||
+      lower.includes("longer than") ||
+      lower.includes("does not pass filter")
+    ) {
+      return t(selectedLang, "err_max_duration", errId);
     }
     if (lower.includes("spotify") || lower.includes("drm")) {
-      return "⚠️ آهنگ‌های مستقیم اسپاتیفای قفل هستند و نمیشه مستقیم دانلودشون کرد. لطفاً اسم آهنگ یا لینکش از یوتیوب/ساندکلاد رو بفرست تا فوری تحویل بدم!";
+      return t(selectedLang, "err_spotify_drm");
     }
-    if (lower.includes("login required") || lower.includes("checkpoint") || lower.includes("instagram")) {
-      return "این پست اینستاگرام خصوصی (Private) است یا نیاز به ورود به حساب دارد.";
+    if (
+      lower.includes("login required") ||
+      lower.includes("checkpoint") ||
+      lower.includes("instagram")
+    ) {
+      return t(selectedLang, "err_instagram_private", errId);
     }
     if (lower.includes("sign in") || lower.includes("bot")) {
-      return "ارتباط با سرور مبدأ موقتاً محدود شده است. لطفاً چند دقیقه دیگر امتحان کنید.";
+      return t(selectedLang, "err_source_blocked", errId);
     }
     if (lower.includes("timeout") || lower.includes("timed out")) {
-      return "زمان دانلود طولانی شد و متوقف گردید. لطفاً مجدداً امتحان کنید.";
+      return t(selectedLang, "err_timeout", errId);
     }
     if (lower.includes("private") || lower.includes("members-only")) {
-      return "این ویدیو خصوصی یا مخصوص اعضا است و امکان دانلود آن وجود ندارد.";
+      return t(selectedLang, "err_private_media", errId);
     }
     if (lower.includes("tiktok")) {
-      return "ارتباط با سرور تیک‌تاک برقرار نشد. لطفاً چند لحظه بعد مجدداً امتحان کنید.";
+      return t(selectedLang, "err_tiktok", errId);
+    }
+    if (lower.includes("یک دانلود در حال پردازش")) {
+      return t(selectedLang, "err_active_job");
     }
   }
 
-  return "متأسفانه ارتباط با سرور مبدأ برقرار نشد. لطفاً لینک را بررسی کرده و چند لحظه دیگر دوباره بفرستید.";
+  return t(selectedLang, "err_generic", errId);
 }
