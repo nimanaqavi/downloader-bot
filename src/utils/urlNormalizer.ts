@@ -53,6 +53,15 @@ export function normalizeMediaUrl(rawUrl: string): string {
       return `https://www.instagram.com${cleanPath}/`;
     }
 
+    // Spotify normalization (strip /intl-xx/ and trailing slashes)
+    if (host.includes("spotify.com") && !host.includes("spotify.link")) {
+      let cleanPath = parsed.pathname.replace(/^\/intl-[a-zA-Z]{2,3}(-[a-zA-Z]{2,3})?\//i, "/");
+      if (cleanPath.length > 1 && cleanPath.endsWith("/")) {
+        cleanPath = cleanPath.slice(0, -1);
+      }
+      return `https://open.spotify.com${cleanPath}`;
+    }
+
     // Strip trailing slashes on generic paths
     if (parsed.pathname.length > 1 && parsed.pathname.endsWith("/")) {
       parsed.pathname = parsed.pathname.slice(0, -1);
