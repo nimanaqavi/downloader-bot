@@ -1,9 +1,11 @@
 import http from "node:http";
 import { createBot } from "./bot/createBot.js";
+import { registerBotCommandsAndMenu } from "./bot/commands.js";
 import { config } from "./config.js";
 import { createDatabase } from "./database/client.js";
 import { CacheRepository } from "./database/repositories/cache.js";
 import { DownloadsRepository } from "./database/repositories/downloads.js";
+import { SettingsRepository } from "./database/repositories/settings.js";
 import { UsersRepository } from "./database/repositories/users.js";
 import { scheduleNightlyYtDlpUpdate, verifyRuntimeDependencies } from "./services/dependencies.js";
 import { Downloader } from "./services/downloader.js";
@@ -31,6 +33,7 @@ async function main(): Promise<void> {
   const users = new UsersRepository(db);
   const downloads = new DownloadsRepository(db);
   const cache = new CacheRepository(db);
+  const settings = new SettingsRepository(db);
 
   const mtprotoUploader = new MtprotoUploader(
     config.telegramApiId,
@@ -44,6 +47,7 @@ async function main(): Promise<void> {
     users,
     downloads,
     cache,
+    settings,
     downloader: new Downloader(
       config.downloadTimeoutMs,
       config.telegramFileLimitBytes,
@@ -55,6 +59,8 @@ async function main(): Promise<void> {
     rateLimiter: new RateLimiter(config.rateLimitMax, config.rateLimitWindowMs),
     mtprotoUploader
   });
+
+  await registerBotCommandsAndMenu(bot, config.adminUserIds);
 
   let server: http.Server | undefined;
 

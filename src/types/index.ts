@@ -10,6 +10,9 @@ export interface User {
   username: string | null;
   firstSeen: string;
   isBanned: boolean;
+  isBlocked?: boolean;
+  language?: string | null;
+  langSet?: boolean;
   lastActive: string;
 }
 

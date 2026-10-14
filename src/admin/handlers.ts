@@ -1,9 +1,19 @@
+import { existsSync, readFileSync } from "node:fs";
 import { Markup, type Telegraf } from "telegraf";
+import { config } from "../config.js";
 import type { CacheRepository } from "../database/repositories/cache.js";
 import type { DownloadsRepository } from "../database/repositories/downloads.js";
+import type { SettingsRepository } from "../database/repositories/settings.js";
 import type { UsersRepository } from "../database/repositories/users.js";
+import { getYtDlpStatus } from "../services/dependencies.js";
+import type { DownloadQueue } from "../services/downloadQueue.js";
+import { gramjsMonitor } from "../services/gramjsMonitor.js";
+import { metricsManager } from "../services/metrics.js";
+import { tikWmCircuit } from "../services/tiktok.js";
 import type { BotContext, User } from "../types/index.js";
-import { formatBytes } from "../utils/formatting.js";
+import { getAccountUsedMb } from "../utils/disk.js";
+import { escapeHtml, formatBytes, renderProgressBar } from "../utils/formatting.js";
+import { sanitizeLog } from "../utils/telegramErrors.js";
 import { BroadcastManager } from "./broadcast.js";
 import { adminMenu, backToAdmin } from "./menus.js";
 
@@ -18,14 +28,16 @@ export function registerAdminHandlers(
   downloads: DownloadsRepository,
   adminIds: Set<string>,
   broadcasts: BroadcastManager,
-  cache: CacheRepository
+  cache: CacheRepository,
+  settings: SettingsRepository,
+  downloadQueue: DownloadQueue
 ): void {
   const isAdmin = (ctx: BotContext) => Boolean(ctx.from && adminIds.has(String(ctx.from.id)));
 
   bot.command("cancel", async (ctx) => {
     if (!isAdmin(ctx)) return;
     broadcasts.cancel(String(ctx.from.id));
-    await ctx.reply("عملیات ادمین لغو شد.", adminMenu());
+    await ctx.reply("عملیات جاری ادمین لغو شد.", adminMenu());
   });
 
   bot.command("admin", async (ctx) => {
@@ -40,6 +52,62 @@ export function registerAdminHandlers(
     await ctx.editMessageText("<b>پنل مدیریت ربات</b>", { parse_mode: "HTML", ...adminMenu() });
   });
 
+  // 1. Detailed System Statistics
+  bot.action("adm:stats", async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    await ctx.answerCbQuery();
+
+    const stats = users.globalStats();
+    const newUsersToday = users.countNewUsersToday();
+    const langStats = users.countByLanguage();
+    const cacheStats = cache.stats();
+    const ytDlpStatus = getYtDlpStatus();
+    const tikWmUsage = tikWmCircuit.getUsageCount();
+    const gramStats = gramjsMonitor.getStats();
+    const perfSummary = metricsManager.getSummary();
+
+    // Memory (RAM) calculation
+    const ramRssMb = Math.round(process.memoryUsage().rss / 1024 / 1024);
+    const ramPct = Math.min(100, Math.round((ramRssMb / 256) * 100));
+
+    // Disk calculation
+    const usedDiskMb = await getAccountUsedMb();
+    const maxBudgetMb = config.maxDiskBudgetMb || 1000;
+    const diskPct = Math.min(100, Math.round((usedDiskMb / maxBudgetMb) * 100));
+
+    const text = [
+      "<b>📊 آمار و وضعیت سیستم</b>",
+      "",
+      `<b>⚡ منابع سرور (VPS 256MB):</b>`,
+      `▸ رم مصرفی: <code>${renderProgressBar(ramPct)} (${ramRssMb}MB / 256MB)</code>`,
+      `▸ دیسک مصرفی: <code>${renderProgressBar(diskPct)} (${usedDiskMb}MB / ${maxBudgetMb}MB)</code>`,
+      `▸ صف دانلود: <code>${downloadQueue.waitingCount} در انتظار │ ${downloadQueue.activeCountNumber} فعال</code>`,
+      "",
+      `<b>👥 کاربران و دانلودها:</b>`,
+      `▸ کل کاربران: <code>${stats.totalUsers}</code> (امروز: <code>${newUsersToday}</code>)`,
+      `▸ تفکیک زبان: 🇮🇷 <code>${langStats.fa}</code> │ 🇬🇧 <code>${langStats.en}</code> │ تعیین‌نشده: <code>${langStats.unset}</code>`,
+      `▸ کل دانلودها: <code>${stats.totalDownloads}</code> (امروز: <code>${stats.downloadsToday}</code>)`,
+      `▸ موفق: <code>${stats.successfulDownloads}</code> │ ناموفق: <code>${stats.failedDownloads}</code>`,
+      "",
+      `<b>📦 ابزارها و کش:</b>`,
+      `▸ مدیاهای کش‌شده: <code>${cacheStats.totalCount}</code> (حجم: <code>${formatBytes(cacheStats.totalSavedBytes)}</code>)`,
+      `▸ نسخه yt-dlp: <code>${ytDlpStatus.version}</code> (آپدیت: <code>${ytDlpStatus.lastUpdated}</code>)`,
+      `▸ دانلودهای تیک‌تاک (TikWM): <code>${tikWmUsage}</code> بار`,
+      "",
+      `<b>🚀 آپلودر GramJS (MTProto):</b>`,
+      `▸ خطاهای FLOOD_WAIT (۲۴ ساعت): <code>${gramStats.floodWaitCount24h}</code>`,
+      `▸ بیشترین توقف: <code>${gramStats.maxWaitSeconds} ثانیه</code>`,
+      `▸ آخرین وضعیت: <code>${escapeHtml(gramStats.lastUploadError)}</code>`,
+      "",
+      `<b>📈 سرعت و عملکرد شبکه:</b>`,
+      `▸ میانه سرعت: <code>${perfSummary.medianSpeedMBs.toFixed(2)} MB/s</code> (صدک ۹۵: <code>${perfSummary.p95SpeedMBs.toFixed(2)} MB/s</code>)`,
+      `▸ میانه زمان تحویل: <code>${perfSummary.medianDurationSec}s</code>`
+    ].join("\n");
+
+    await ctx.editMessageText(text, { parse_mode: "HTML", ...backToAdmin() });
+  });
+
+  // 2. Cache Management
   bot.action("adm:cache", async (ctx) => {
     if (!isAdmin(ctx)) return;
     await ctx.answerCbQuery();
@@ -47,7 +115,7 @@ export function registerAdminHandlers(
     const text = [
       "<b>مدیریت کش دانلودها ⚡</b>",
       `<blockquote>▸ تعداد رسانه‌های کش‌شده: <code>${stats.totalCount}</code></blockquote>`,
-      `<blockquote>▸ حجم کل در کش: <code>${formatBytes(stats.totalSavedBytes)}</code></blockquote>`
+      `<blockquote>▸ حجم کل صرفه‌جویی‌شده: <code>${formatBytes(stats.totalSavedBytes)}</code></blockquote>`
     ].join("\n");
 
     const keyboard = Markup.inlineKeyboard([
@@ -65,6 +133,145 @@ export function registerAdminHandlers(
     await ctx.editMessageText("<b>کش با موفقیت پاک شد.</b>", { parse_mode: "HTML", ...backToAdmin() });
   });
 
+  // 3. Force Join Settings
+  bot.action("adm:forcejoin", async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    await ctx.answerCbQuery();
+    const isEnabled = settings.isForceJoinEnabled();
+    const channel = settings.getForceJoinChannel() || "تنظیم‌نشده";
+
+    const text = [
+      "<b>📢 تنظیمات عضویت اجباری (Force Join)</b>",
+      `<blockquote>▸ وضعیت: <b>${isEnabled ? "فعال ✅" : "غیرفعال ❌"}</b></blockquote>`,
+      `<blockquote>▸ کانال هدف: <code>${escapeHtml(channel)}</code></blockquote>`,
+      "",
+      "برای تغییر کانال، دستور زیر را ارسال کنید:",
+      "<code>/setchannel @YourChannel</code>"
+    ].join("\n");
+
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback(isEnabled ? "🔴 غیرفعال‌سازی" : "🟢 فعال‌سازی", "adm:fj_toggle")],
+      [Markup.button.callback("بازگشت", "adm:home")]
+    ]);
+
+    await ctx.editMessageText(text, { parse_mode: "HTML", ...keyboard });
+  });
+
+  bot.action("adm:fj_toggle", async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    const current = settings.isForceJoinEnabled();
+    settings.setForceJoinEnabled(!current);
+    await ctx.answerCbQuery(`جوین اجباری ${!current ? "فعال" : "غیرفعال"} شد.`);
+    // Re-render
+    const isEnabled = !current;
+    const channel = settings.getForceJoinChannel() || "تنظیم‌نشده";
+    const text = [
+      "<b>📢 تنظیمات عضویت اجباری (Force Join)</b>",
+      `<blockquote>▸ وضعیت: <b>${isEnabled ? "فعال ✅" : "غیرفعال ❌"}</b></blockquote>`,
+      `<blockquote>▸ کانال هدف: <code>${escapeHtml(channel)}</code></blockquote>`,
+      "",
+      "برای تغییر کانال، دستور زیر را ارسال کنید:",
+      "<code>/setchannel @YourChannel</code>"
+    ].join("\n");
+
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback(isEnabled ? "🔴 غیرفعال‌سازی" : "🟢 فعال‌سازی", "adm:fj_toggle")],
+      [Markup.button.callback("بازگشت", "adm:home")]
+    ]);
+
+    await ctx.editMessageText(text, { parse_mode: "HTML", ...keyboard });
+  });
+
+  bot.command("setchannel", async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    const arg = ctx.message.text.split(/\s+/)[1]?.trim();
+    if (!arg) {
+      await ctx.reply("لطفاً آیدی کانال را وارد کنید. مثال:\n<code>/setchannel @mychannel</code>", { parse_mode: "HTML" });
+      return;
+    }
+    settings.setForceJoinChannel(arg);
+    await ctx.reply(`کانال جوین اجباری با موفقیت روی <code>${escapeHtml(arg)}</code> تنظیم شد.`, { parse_mode: "HTML", ...backToAdmin() });
+  });
+
+  // 4. Last 20 Log Lines (Sanitized)
+  bot.action("adm:logs", async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    await ctx.answerCbQuery();
+
+    let logText = "فایل لاگ یافت نشد.";
+    const logPaths = [
+      "/home/hermemssss/mimo/bot.log",
+      "bot.log"
+    ];
+
+    for (const p of logPaths) {
+      if (existsSync(p)) {
+        try {
+          const content = readFileSync(p, "utf-8");
+          const lines = content.trim().split("\n").slice(-20);
+          logText = lines.join("\n");
+          break;
+        } catch {}
+      }
+    }
+
+    const sanitized = sanitizeLog(logText, config.botToken);
+    const text = [
+      "<b>📜 ۲۰ خط آخر لاگ سیستم (سانسور شده):</b>",
+      `<pre><code>${escapeHtml(sanitized.slice(-3500))}</code></pre>`
+    ].join("\n");
+
+    await ctx.editMessageText(text, { parse_mode: "HTML", ...backToAdmin() });
+  });
+
+  // 5. Banned Users List & Ban/Unban
+  bot.action("adm:banned", async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    await ctx.answerCbQuery();
+    const banned = users.listBanned(10);
+
+    if (banned.length === 0) {
+      await ctx.editMessageText("<b>هیچ کاربری مسدود نیست.</b>", { parse_mode: "HTML", ...backToAdmin() });
+      return;
+    }
+
+    const rows = banned.map(
+      (u) => `• <b>${displayName(u)}</b> (<code>${u.telegramId}</code>)`
+    );
+
+    const buttons = banned.map((u) => [
+      Markup.button.callback(`رفع مسدودیت ${displayName(u)}`, `adm:ban:${u.id}:0:0`)
+    ]);
+    buttons.push([Markup.button.callback("بازگشت", "adm:home")]);
+
+    const text = [
+      "<b>🚫 لیست کاربران مسدودشده (۱۰ نفر اخیر):</b>",
+      rows.join("\n"),
+      "",
+      "برای مسدود یا آن‌بن کردن دستی دستورات زیر را بفرستید:",
+      "<code>/ban 123456789</code> یا <code>/unban 123456789</code>"
+    ].join("\n");
+
+    await ctx.editMessageText(text, { parse_mode: "HTML", ...Markup.inlineKeyboard(buttons) });
+  });
+
+  bot.command("ban", async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    const tgId = ctx.message.text.split(/\s+/)[1]?.trim();
+    if (!tgId) return void (await ctx.reply("شناسه تلگرام را وارد کنید: <code>/ban 12345678</code>", { parse_mode: "HTML" }));
+    users.banByTelegramId(tgId, true);
+    await ctx.reply(`کاربر با آیدی <code>${tgId}</code> مسدود شد.`, { parse_mode: "HTML" });
+  });
+
+  bot.command("unban", async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    const tgId = ctx.message.text.split(/\s+/)[1]?.trim();
+    if (!tgId) return void (await ctx.reply("شناسه تلگرام را وارد کنید: <code>/unban 12345678</code>", { parse_mode: "HTML" }));
+    users.banByTelegramId(tgId, false);
+    await ctx.reply(`کاربر با آیدی <code>${tgId}</code> رفع مسدودیت شد.`, { parse_mode: "HTML" });
+  });
+
+  // 6. User List & Pagination
   bot.action(/^adm:users:(\d+)$/, async (ctx) => {
     if (!isAdmin(ctx)) return;
     await ctx.answerCbQuery();
@@ -100,7 +307,7 @@ export function registerAdminHandlers(
     const safePage = Math.min(page, pages - 1);
     const history = downloads.listForUser(userId, safePage, HISTORY_SIZE);
     const historyText = history.length
-      ? history.map((item) => `${item.status === "success" ? "✓" : "✕"} │ ${formatDate(item.createdAt)}\n<code>${item.url}</code>`).join("\n\n")
+      ? history.map((item) => `${item.status === "success" ? "✓" : "✕"} │ ${formatDate(item.createdAt)}\n<code>${escapeHtml(item.url)}</code>`).join("\n\n")
       : "بدون دانلود.";
     const text = [
       `<b>${displayName(user)}</b> (<code>${user.telegramId}</code>)`,
@@ -139,28 +346,42 @@ export function registerAdminHandlers(
     });
   });
 
-  bot.action("adm:stats", async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    await ctx.answerCbQuery();
-    const stats = users.globalStats();
-    const text = [
-      "<b>آمار کلی ربات</b>",
-      `<blockquote>▸ کل کاربران: <code>${stats.totalUsers}</code></blockquote>`,
-      `<blockquote>▸ کل دانلودها: <code>${stats.totalDownloads}</code></blockquote>`,
-      `<blockquote>▸ دانلودهای امروز: <code>${stats.downloadsToday}</code></blockquote>`,
-      `<blockquote>▸ دانلودهای موفق: <code>${stats.successfulDownloads}</code></blockquote>`,
-      `<blockquote>▸ دانلودهای ناموفق: <code>${stats.failedDownloads}</code></blockquote>`
-    ].join("\n");
-    await ctx.editMessageText(text, { parse_mode: "HTML", ...backToAdmin() });
-  });
-
   bot.action("adm:broadcast", async (ctx) => {
     if (!isAdmin(ctx)) return;
     await ctx.answerCbQuery();
-    broadcasts.begin(String(ctx.from.id));
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback("🌐 همه کاربران (All)", "adm:bc_target:all")],
+      [Markup.button.callback("🇮🇷 فقط فارسی (Persian)", "adm:bc_target:fa")],
+      [Markup.button.callback("🇬🇧 فقط انگلیسی (English)", "adm:bc_target:en")],
+      [Markup.button.callback("بازگشت", "adm:home")]
+    ]);
     await ctx.editMessageText(
-      "پیامی که می‌خواهید به تمام کاربران ارسال شود را بفرستید.\nبرای انصراف /cancel بزنید.",
-      backToAdmin()
+      "<b>ارسال پیام همگانی</b>\nجامعه هدف پیام را انتخاب کنید:",
+      { parse_mode: "HTML", ...keyboard }
     );
+  });
+
+  bot.action(/^adm:bc_target:(all|fa|en)$/, async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    await ctx.answerCbQuery();
+    const target = ctx.match[1] as "all" | "fa" | "en";
+    const label =
+      target === "fa" ? "فقط فارسی" : target === "en" ? "فقط انگلیسی" : "همه کاربران";
+
+    try {
+      broadcasts.begin(String(ctx.from.id), target);
+      await ctx.editMessageText(
+        `پیامی که می‌خواهید به <b>${label}</b> ارسال شود را بفرستید.\nبرای انصراف /cancel بزنید.`,
+        { parse_mode: "HTML", ...backToAdmin() }
+      );
+    } catch (err: any) {
+      await ctx.editMessageText(err?.message || "خطا در شروع ارسال همگانی.", backToAdmin());
+    }
+  });
+
+  bot.action("adm:cancel_bc", async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    await ctx.answerCbQuery("درخواست لغو ارسال همگانی ثبت شد.");
+    broadcasts.requestCancel();
   });
 }

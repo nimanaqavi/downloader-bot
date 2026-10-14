@@ -23,7 +23,8 @@ const schema = z.object({
   DISK_SAFETY_MARGIN_MB: z.coerce.number().int().positive().default(100),
   MAX_DISK_BUDGET_MB: z.coerce.number().int().positive().default(1000),
   STORAGE_CHANNEL_ID: z.string().optional(),
-  BOT_USERNAME: z.string().default("instagramdl_mahibot")
+  BOT_USERNAME: z.string().default("instagramdl_mahibot"),
+  TIKTOK_PROVIDER: z.enum(["tikwm_first", "ytdlp_first", "ytdlp_only"]).default("tikwm_first")
 });
 
 const parsed = schema.safeParse(process.env);
@@ -58,5 +59,6 @@ export const config = {
   diskSafetyMarginBytes: parsed.data.DISK_SAFETY_MARGIN_MB * 1024 * 1024,
   maxDiskBudgetMb: parsed.data.MAX_DISK_BUDGET_MB,
   storageChannelId: parsed.data.STORAGE_CHANNEL_ID ? parsed.data.STORAGE_CHANNEL_ID.trim() : undefined,
-  botUsername: parsed.data.BOT_USERNAME.replace(/^@/, "")
+  botUsername: parsed.data.BOT_USERNAME.replace(/^@/, ""),
+  tiktokProvider: parsed.data.TIKTOK_PROVIDER
 };

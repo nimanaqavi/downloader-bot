@@ -1,5 +1,8 @@
 import { runProcess } from "./process.js";
 
+let currentYtDlpVersion = "نامعلوم";
+let lastYtDlpUpdateTime = "هنوز انجام نشده";
+
 async function check(command: string, args: string[]): Promise<string | null> {
   try {
     const result = await runProcess(command, args, 15_000);
@@ -9,11 +12,20 @@ async function check(command: string, args: string[]): Promise<string | null> {
   }
 }
 
+export function getYtDlpStatus(): { version: string; lastUpdated: string } {
+  return {
+    version: currentYtDlpVersion,
+    lastUpdated: lastYtDlpUpdateTime
+  };
+}
+
 export async function verifyRuntimeDependencies(autoUpdateYtDlp: boolean): Promise<void> {
   const [ytDlpVersion, ffmpegVersion] = await Promise.all([
     check("yt-dlp", ["--version"]),
     check("ffmpeg", ["-version"])
   ]);
+
+  currentYtDlpVersion = ytDlpVersion || "ناموجود";
 
   console.info(ytDlpVersion ? `[startup] yt-dlp: ${ytDlpVersion}` : "[startup] yt-dlp: MISSING");
   console.info(ffmpegVersion ? `[startup] ffmpeg: ${ffmpegVersion}` : "[startup] ffmpeg: MISSING");
@@ -29,6 +41,9 @@ export async function verifyRuntimeDependencies(autoUpdateYtDlp: boolean): Promi
     console.info("[startup] Updating yt-dlp...");
     try {
       const result = await runProcess("yt-dlp", ["-U"], 120_000);
+      lastYtDlpUpdateTime = new Date().toISOString().replace("T", " ").slice(0, 19);
+      const updatedVer = await check("yt-dlp", ["--version"]);
+      if (updatedVer) currentYtDlpVersion = updatedVer;
       console.info(`[startup] ${result.stdout.trim() || "yt-dlp update completed"}`);
     } catch (error) {
       console.warn("[startup] yt-dlp auto-update failed; continuing with the installed version:", error);
@@ -44,6 +59,9 @@ export function scheduleNightlyYtDlpUpdate(enabled: boolean): NodeJS.Timeout | n
     console.info("[nightly] Running scheduled yt-dlp update...");
     try {
       const result = await runProcess("yt-dlp", ["-U"], 120_000);
+      lastYtDlpUpdateTime = new Date().toISOString().replace("T", " ").slice(0, 19);
+      const updatedVer = await check("yt-dlp", ["--version"]);
+      if (updatedVer) currentYtDlpVersion = updatedVer;
       console.info(`[nightly] yt-dlp update: ${result.stdout.trim() || "already up to date"}`);
     } catch (err) {
       console.warn("[nightly] Scheduled yt-dlp update encountered an error:", err);

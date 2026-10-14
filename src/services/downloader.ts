@@ -61,6 +61,8 @@ export function buildYtDlpArgs(options: BuildArgsOptions): string[] {
     "--no-cache-dir",
     "--socket-timeout",
     "30",
+    "--concurrent-fragments",
+    "4", // 4 concurrent fragments for fast HLS/DASH streaming
     "--match-filter",
     `duration <=? ${options.maxDurationSeconds} & !is_live`,
     "--max-filesize",
@@ -69,6 +71,10 @@ export function buildYtDlpArgs(options: BuildArgsOptions): string[] {
     "--format-sort",
     sortRule
   ];
+
+  if (options.isYouTube && !options.isAudio) {
+    args.push("--http-chunk-size", "10M");
+  }
 
   if (options.playlistItem) {
     args.push("--playlist-items", String(options.playlistItem));
@@ -115,6 +121,7 @@ export function buildYtDlpArgs(options: BuildArgsOptions): string[] {
 export interface MediaMetadata {
   title: string;
   duration?: number;
+  author?: string;
   uploader?: string;
   filesizeApprox?: number;
 }
@@ -126,6 +133,7 @@ export class Downloader {
   private readonly maxDurationSeconds: number;
   private readonly diskSafetyMarginBytes: number;
   private readonly maxDiskBudgetMb?: number;
+  private metadataCache = new Map<string, { meta: MediaMetadata; timestamp: number }>();
 
   constructor(
     timeoutMs: number,
@@ -168,12 +176,17 @@ export class Downloader {
   }
 
   async fetchMetadata(url: string): Promise<MediaMetadata> {
+    const cached = this.metadataCache.get(url);
+    if (cached && Date.now() - cached.timestamp < 10 * 60 * 1000) {
+      return cached.meta;
+    }
+
     const args = [
       "--force-ipv4",
       "--no-warnings",
       "--no-playlist",
       "--print",
-      "%(title)s\t%(duration)s\t%(uploader)s\t%(filesize,filesize_approx)s"
+      "%(title)s\t%(duration)s\t%(artist,creator,uploader,channel)s\t%(filesize,filesize_approx)s"
     ];
     if (this.cookiesPath && existsSync(this.cookiesPath)) {
       args.push("--cookies", this.cookiesPath);
@@ -186,16 +199,21 @@ export class Downloader {
       const parts = firstLine.split("\t");
       const title = parts[0]?.trim() || "مدیا";
       const duration = parts[1] && !isNaN(Number(parts[1])) ? Number(parts[1]) : undefined;
-      const uploader = parts[2]?.trim() || undefined;
+      const rawAuthor = parts[2]?.trim();
+      const author = rawAuthor && rawAuthor !== "NA" ? rawAuthor : undefined;
       const rawSize = parts[3]?.trim();
       const filesizeApprox = rawSize && !isNaN(Number(rawSize)) ? Number(rawSize) : undefined;
 
-      return {
+      const meta: MediaMetadata = {
         title,
         duration,
-        uploader,
+        author,
+        uploader: author,
         filesizeApprox
       };
+
+      this.metadataCache.set(url, { meta, timestamp: Date.now() });
+      return meta;
     } catch {
       return {
         title: "مدیا"
@@ -211,7 +229,8 @@ export class Downloader {
       playlistItem?: number;
       onProgress?: (percentage: number) => void;
     }
-  ): Promise<DownloadResult & { tempDirectory: string; isAudio?: boolean }> {
+  ): Promise<DownloadResult & { tempDirectory: string; isAudio?: boolean; author?: string; downloadDurationMs: number }> {
+    const startDownloadTime = Date.now();
     const isAudio = quality === "audio";
     const isYouTube = /(?:youtube\.com|youtu\.be)/i.test(url);
     const isMergeNeeded = isYouTube && !isAudio;
@@ -303,6 +322,9 @@ export class Downloader {
         }
       }
 
+      const cachedMeta = this.metadataCache.get(url)?.meta;
+      const downloadDurationMs = Date.now() - startDownloadTime;
+
       return {
         tempDirectory,
         mediaPath: filePath,
@@ -310,7 +332,11 @@ export class Downloader {
         mediaType,
         thumbnailPath,
         fileSizeBytes,
-        isAudio: mediaType === "audio"
+        isAudio: mediaType === "audio",
+        title: cachedMeta?.title,
+        author: cachedMeta?.author,
+        durationSeconds: cachedMeta?.duration,
+        downloadDurationMs
       };
     } catch (error) {
       await removeDirectory(tempDirectory);
