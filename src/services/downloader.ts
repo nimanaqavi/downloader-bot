@@ -177,6 +177,7 @@ export class Downloader {
   private readonly diskSafetyMarginBytes: number;
   private readonly maxDiskBudgetMb?: number;
   private metadataCache = new Map<string, { meta: MediaMetadata; timestamp: number }>();
+  private probeCache = new Map<string, { data: { mediaType: MediaType; width?: number; height?: number; title?: string; duration?: number; itemCount?: number }; timestamp: number }>();
 
   constructor(
     timeoutMs: number,
@@ -195,6 +196,11 @@ export class Downloader {
   }
 
   async getMediaItemCount(url: string): Promise<number> {
+    const cached = this.probeCache.get(`${url}:0`);
+    if (cached && Date.now() - cached.timestamp < 10 * 60 * 1000 && cached.data.itemCount !== undefined) {
+      return cached.data.itemCount;
+    }
+
     const args = [
       "--force-ipv4",
       "--no-warnings",
@@ -210,8 +216,46 @@ export class Downloader {
       const { stdout } = await runProcess("yt-dlp", args, 20_000);
       const json = JSON.parse(stdout);
       if (json._type === "playlist" && Array.isArray(json.entries)) {
-        return Math.max(1, json.entries.length);
+        const count = Math.max(1, json.entries.length);
+        this.probeCache.set(`${url}:0`, {
+          data: {
+            mediaType: detectItemMediaType(json.entries[0] || json),
+            itemCount: count,
+            title: json.title
+          },
+          timestamp: Date.now()
+        });
+
+        // Pre-cache individual entries if present
+        json.entries.forEach((entry: any, i: number) => {
+          this.probeCache.set(`${url}:${i + 1}`, {
+            data: {
+              mediaType: detectItemMediaType(entry),
+              width: typeof entry.width === "number" ? entry.width : undefined,
+              height: typeof entry.height === "number" ? entry.height : undefined,
+              title: entry.title,
+              duration: typeof entry.duration === "number" ? entry.duration : undefined
+            },
+            timestamp: Date.now()
+          });
+        });
+
+        return count;
       }
+
+      const mediaType = detectItemMediaType(json);
+      this.probeCache.set(`${url}:0`, {
+        data: {
+          mediaType,
+          itemCount: 1,
+          width: typeof json.width === "number" ? json.width : undefined,
+          height: typeof json.height === "number" ? json.height : undefined,
+          title: json.title,
+          duration: typeof json.duration === "number" ? json.duration : undefined
+        },
+        timestamp: Date.now()
+      });
+
       return 1;
     } catch {
       return 1;
@@ -228,6 +272,12 @@ export class Downloader {
     title?: string;
     duration?: number;
   }> {
+    const key = `${url}:${playlistItem || 0}`;
+    const cached = this.probeCache.get(key);
+    if (cached && Date.now() - cached.timestamp < 10 * 60 * 1000) {
+      return cached.data;
+    }
+
     const args = [
       "--force-ipv4",
       "--no-warnings",
@@ -252,13 +302,15 @@ export class Downloader {
           : json;
 
       const mediaType = detectItemMediaType(entry);
-      return {
+      const data = {
         mediaType,
         width: typeof entry.width === "number" ? entry.width : undefined,
         height: typeof entry.height === "number" ? entry.height : undefined,
         title: entry.title,
         duration: typeof entry.duration === "number" ? entry.duration : undefined
       };
+      this.probeCache.set(key, { data, timestamp: Date.now() });
+      return data;
     } catch {
       return { mediaType: "video" };
     }
