@@ -38,6 +38,11 @@ export function friendlyDownloadError(
     if (lower.includes("max-filesize") || lower.includes("file is larger")) {
       return t(selectedLang, "err_max_size", errId);
     }
+    if (lower.includes("too large") || lower.includes("413")) {
+      return selectedLang === "en"
+        ? `⚠️ This video exceeds Telegram's 50MB Bot limit. To upload files up to 2GB, please configure TELEGRAM_API_ID & TELEGRAM_API_HASH on the server, or download 360p instead.\n<code>Error ID: ${errId}</code>`
+        : `⚠️ حجم این ویدیو بیش از ۵۰ مگابایت است. ارسال فایل‌های بالای ۵۰ مگابایت (تا ۲ گیگابایت) در تلگرام نیازمند تنظیم TELEGRAM_API_ID و TELEGRAM_API_HASH در سرور است. لطفاً کیفیت 360p را انتخاب فرمایید.\n<code>کد پیگیری: ${errId}</code>`;
+    }
     if (
       lower.includes("duration") ||
       lower.includes("longer than") ||

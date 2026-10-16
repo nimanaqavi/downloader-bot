@@ -239,7 +239,7 @@ export function registerDownloadHandler(
         .catch(() => undefined);
     }
 
-    pendingSelections.set(token, {
+    const pendingData: PendingSelection = {
       userId: ctx.from.id,
       url: media.url,
       urlNormalized,
@@ -253,7 +253,10 @@ export function registerDownloadHandler(
       isPhotoCard,
       timestamp: Date.now(),
       lang: userLang
-    });
+    };
+
+    pendingSelections.set(token, pendingData);
+    settings.set(`pending:${token}`, JSON.stringify(pendingData));
   };
 
   bot.on(message("text"), async (ctx, next) => {
@@ -287,14 +290,52 @@ export function registerDownloadHandler(
   });
 
   // Handle Quality Selection Callbacks
-  bot.action(/^q:([a-f0-9]+):([a-z0-9]+)$/, async (ctx) => {
+  bot.action(/^q:([a-zA-Z0-9_-]+):([a-z0-9]+)$/, async (ctx) => {
     await ctx.answerCbQuery().catch(() => undefined);
-    const token = ctx.match[1]!;
+    const ref = ctx.match[1]!;
     const quality = ctx.match[2]! as VideoQuality;
     const tgId = ctx.from ? String(ctx.from.id) : "";
     const userLang = users.getLanguage(tgId);
 
-    const pending = pendingSelections.get(token);
+    // 1. Direct stateless resolution for YouTube (never expires!)
+    if (ref.startsWith("y_") && ref.length === 13) {
+      const videoId = ref.slice(2);
+      const ytUrl = `https://www.youtube.com/watch?v=${videoId}`;
+      await ctx.deleteMessage().catch(() => undefined);
+      const newStatus = await ctx.reply(t(userLang, "checking_link"), { parse_mode: "HTML" });
+
+      await executePipeline({
+        ctx,
+        bot,
+        adminIds,
+        url: ytUrl,
+        urlNormalized: ytUrl,
+        platformName: "یوتیوب",
+        platformKey: "youtube",
+        quality,
+        statusMsgId: newStatus.message_id,
+        downloads,
+        downloader,
+        downloadQueue,
+        mtprotoUploader,
+        cache,
+        settings,
+        lang: userLang
+      });
+      return;
+    }
+
+    // 2. Memory + SQLite-persisted fallback for other links
+    let pending = pendingSelections.get(ref);
+    if (!pending) {
+      const persisted = settings.get(`pending:${ref}`);
+      if (persisted) {
+        try {
+          pending = JSON.parse(persisted);
+        } catch {}
+      }
+    }
+
     if (!pending) {
       await ctx
         .editMessageText(t(userLang, "err_session_expired"), {
@@ -305,7 +346,8 @@ export function registerDownloadHandler(
     }
 
     if (pending.userId !== ctx.from.id) return;
-    pendingSelections.delete(token);
+    pendingSelections.delete(ref);
+    settings.set(`pending:${ref}`, "");
 
     // If it was a photo card, delete the photo message and send a fresh text message for progress
     if (pending.isPhotoCard) {
@@ -421,6 +463,18 @@ function buildQualityKeyboard(
   const downloadLabel = t(lang, "btn_download");
 
   if (isYt) {
+    let ytId = "";
+    try {
+      const u = new URL(urlNormalized);
+      if (u.hostname.includes("youtu.be")) {
+        ytId = u.pathname.slice(1).split("/")[0] || "";
+      } else if (u.searchParams.get("v")) {
+        ytId = u.searchParams.get("v") || "";
+      }
+    } catch {}
+
+    const ref = ytId && /^[a-zA-Z0-9_-]{11}$/.test(ytId) ? `y_${ytId}` : token;
+
     const has720 = cache.hasQuality(urlNormalized, "720p") ? "⚡ " : "";
     const has480 = cache.hasQuality(urlNormalized, "480p") ? "⚡ " : "";
     const has360 = cache.hasQuality(urlNormalized, "360p") ? "⚡ " : "";
@@ -428,12 +482,12 @@ function buildQualityKeyboard(
 
     return Markup.inlineKeyboard([
       [
-        Markup.button.callback(`${has720}720p`, `q:${token}:720p`),
-        Markup.button.callback(`${has480}480p`, `q:${token}:480p`)
+        Markup.button.callback(`${has720}720p`, `q:${ref}:720p`),
+        Markup.button.callback(`${has480}480p`, `q:${ref}:480p`)
       ],
       [
-        Markup.button.callback(`${has360}360p`, `q:${token}:360p`),
-        Markup.button.callback(`${hasAudio}${mp3Label}`, `q:${token}:audio`)
+        Markup.button.callback(`${has360}360p`, `q:${ref}:360p`),
+        Markup.button.callback(`${hasAudio}${mp3Label}`, `q:${ref}:audio`)
       ],
       [Markup.button.callback(cancelLabel, "cancel")]
     ]);
