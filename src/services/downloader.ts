@@ -111,6 +111,10 @@ export function buildYtDlpArgs(options: BuildArgsOptions): string[] {
     args.push("--http-chunk-size", "10M");
   }
 
+  if (options.url.includes("tiktok.com")) {
+    args.push("--impersonate", "chrome");
+  }
+
   if (options.playlistItem) {
     args.push("--playlist-items", String(options.playlistItem));
   } else {
@@ -207,6 +211,9 @@ export class Downloader {
       "--flat-playlist",
       "-J"
     ];
+    if (url.includes("tiktok.com")) {
+      args.push("--impersonate", "chrome");
+    }
     if (this.cookiesPath && existsSync(this.cookiesPath)) {
       args.push("--cookies", this.cookiesPath);
     }
@@ -283,6 +290,9 @@ export class Downloader {
       "--no-warnings",
       "-J"
     ];
+    if (url.includes("tiktok.com")) {
+      args.push("--impersonate", "chrome");
+    }
     if (playlistItem) {
       args.push("--playlist-items", String(playlistItem));
     } else {
@@ -329,6 +339,9 @@ export class Downloader {
       "--print",
       "%(title)s\t%(duration)s\t%(artist,creator,uploader,channel)s\t%(filesize,filesize_approx)s\t%(thumbnail)s\t%(id)s"
     ];
+    if (url.includes("tiktok.com")) {
+      args.push("--impersonate", "chrome");
+    }
     if (this.cookiesPath && existsSync(this.cookiesPath)) {
       args.push("--cookies", this.cookiesPath);
     }
