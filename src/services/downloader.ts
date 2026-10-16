@@ -107,10 +107,6 @@ export function buildYtDlpArgs(options: BuildArgsOptions): string[] {
     sortRule
   ];
 
-  if (options.isYouTube && !options.isAudio) {
-    args.push("--http-chunk-size", "10M");
-  }
-
   if (options.url.includes("tiktok.com")) {
     args.push("--impersonate", "chrome");
   }
