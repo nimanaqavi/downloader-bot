@@ -14,6 +14,7 @@ import type { BotContext } from "../types/index.js";
 import { registerDownloadHandler } from "./handlers/download.js";
 import { registerHistoryHandler } from "./handlers/history.js";
 import { registerStartHandler } from "./handlers/start.js";
+import { registerStickerHandler } from "./handlers/sticker.js";
 import { registerUser } from "./middleware/registerUser.js";
 import { requireNotBanned } from "./middleware/requireNotBanned.js";
 
@@ -49,6 +50,7 @@ export function createBot(dependencies: BotDependencies): Telegraf<BotContext> {
   });
 
   registerHistoryHandler(bot, dependencies.downloads, dependencies.users, dependencies.settings);
+  registerStickerHandler(bot, dependencies.adminIds, dependencies.settings);
   registerAdminHandlers(
     bot,
     dependencies.users,

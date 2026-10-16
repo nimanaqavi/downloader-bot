@@ -60,4 +60,24 @@ export class SettingsRepository {
     const customId = this.getPlatformEmojiId(platform);
     return renderPlatformEmojiHtml(platform, customId);
   }
+
+  // Platform Stickers Management
+  isPlatformStickersEnabled(): boolean {
+    return this.get("platform_stickers_enabled", "true") === "true";
+  }
+
+  setPlatformStickersEnabled(enabled: boolean): void {
+    this.set("platform_stickers_enabled", enabled ? "true" : "false");
+  }
+
+  getPlatformSticker(platform: string): string | null {
+    const key = normalizePlatformKey(platform);
+    const val = this.get(`platform_sticker:${key}`, "");
+    return val ? val.trim() : null;
+  }
+
+  setPlatformSticker(platform: string, fileId: string): void {
+    const key = normalizePlatformKey(platform);
+    this.set(`platform_sticker:${key}`, fileId.trim());
+  }
 }

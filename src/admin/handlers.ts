@@ -37,19 +37,30 @@ export function registerAdminHandlers(
   bot.command("cancel", async (ctx) => {
     if (!isAdmin(ctx)) return;
     broadcasts.cancel(String(ctx.from.id));
-    await ctx.reply("عملیات جاری ادمین لغو شد.", adminMenu());
+    await ctx.reply("عملیات جاری ادمین لغو شد.", adminMenu(settings.isPlatformStickersEnabled()));
   });
 
   bot.command("admin", async (ctx) => {
     if (!isAdmin(ctx)) return;
-    await ctx.reply("<b>پنل مدیریت ربات</b>", { parse_mode: "HTML", ...adminMenu() });
+    await ctx.reply("<b>پنل مدیریت ربات</b>", { parse_mode: "HTML", ...adminMenu(settings.isPlatformStickersEnabled()) });
   });
 
   bot.action("adm:home", async (ctx) => {
     if (!isAdmin(ctx)) return;
     broadcasts.cancel(String(ctx.from.id));
     await ctx.answerCbQuery();
-    await ctx.editMessageText("<b>پنل مدیریت ربات</b>", { parse_mode: "HTML", ...adminMenu() });
+    await ctx.editMessageText("<b>پنل مدیریت ربات</b>", { parse_mode: "HTML", ...adminMenu(settings.isPlatformStickersEnabled()) });
+  });
+
+  bot.action("adm:toggle_stickers", async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    const current = settings.isPlatformStickersEnabled();
+    settings.setPlatformStickersEnabled(!current);
+    await ctx.answerCbQuery(current ? "ارسال استیکر پلتفرم خاموش شد" : "ارسال استیکر پلتفرم روشن شد");
+    await ctx.editMessageText("<b>پنل مدیریت ربات</b>", {
+      parse_mode: "HTML",
+      ...adminMenu(settings.isPlatformStickersEnabled())
+    });
   });
 
   // 1. Detailed System Statistics
