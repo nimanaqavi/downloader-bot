@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, readdir, stat } from "node:fs/promises";
+import { mkdtemp, open, readdir, rename, stat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DownloadResult, MediaType } from "../types/index.js";
@@ -396,6 +396,38 @@ export class Downloader {
       const imageFiles = files.filter((name) =>
         imageExtensions.has(name.split(".").pop()?.toLowerCase() ?? "")
       );
+
+      // If no recognized extension was found, inspect files by magic bytes
+      if (!videoFile && !audioFile && imageFiles.length === 0 && files.length > 0) {
+        for (const fname of files) {
+          const fpath = join(tempDirectory, fname);
+          try {
+            const fd = await open(fpath, "r");
+            const buf = Buffer.alloc(12);
+            await fd.read(buf, 0, 12, 0);
+            await fd.close();
+
+            if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+              const newName = "media.jpg";
+              await rename(fpath, join(tempDirectory, newName));
+              imageFiles.push(newName);
+              break;
+            } else if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+              const newName = "media.png";
+              await rename(fpath, join(tempDirectory, newName));
+              imageFiles.push(newName);
+              break;
+            } else if (buf.subarray(0, 4).toString() === "RIFF" && buf.subarray(8, 12).toString() === "WEBP") {
+              const newName = "media.webp";
+              await rename(fpath, join(tempDirectory, newName));
+              imageFiles.push(newName);
+              break;
+            }
+          } catch {
+            // Ignore inspection errors
+          }
+        }
+      }
 
       let mediaFile: string | undefined;
       let mediaType: MediaType = "video";
