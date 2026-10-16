@@ -52,6 +52,22 @@ interface PendingSelection {
 
 const pendingSelections = new Map<string, PendingSelection>();
 
+async function sendPlatformStickerIfConfigured(
+  ctx: any,
+  platform: string,
+  settings: SettingsRepository
+): Promise<void> {
+  try {
+    if (!settings.isPlatformStickersEnabled()) return;
+    const stickerId = settings.getPlatformSticker(platform);
+    if (stickerId) {
+      await ctx.telegram.sendSticker(ctx.chat.id, stickerId).catch(() => undefined);
+    }
+  } catch {
+    // Ignore all sticker sending errors to never block media delivery
+  }
+}
+
 function cleanupPending(): void {
   const now = Date.now();
   for (const [token, item] of pendingSelections.entries()) {
@@ -465,6 +481,7 @@ async function handleSpotify(
         lang
       });
 
+      await sendPlatformStickerIfConfigured(ctx, "spotify", settings);
       await ctx.telegram.copyMessage(ctx.chat.id, cached.chatId, cached.messageId, {
         caption,
         parse_mode: "HTML"
@@ -499,6 +516,7 @@ async function handleSpotify(
       lang
     });
 
+    await sendPlatformStickerIfConfigured(ctx, "spotify", settings);
     const uploadRes = await sendMediaMessage(ctx, result, caption, mtprotoUploader, undefined, undefined, {
       title: result.title,
       performer: result.artist,
@@ -615,6 +633,7 @@ async function handleTikTok(
         const downloadId = downloads.create(ctx.dbUser!.id, media.url, "success", result.fileSizeBytes, "TikTok");
         const mp3Button = Markup.inlineKeyboard([[Markup.button.callback(t(lang, "btn_get_mp3"), `mp3:${downloadId}`)]]);
 
+        await sendPlatformStickerIfConfigured(ctx, "tiktok", settings);
         const uploadRes = await sendMediaMessage(ctx, result, caption, mtprotoUploader, mp3Button);
 
         if (uploadRes) {
@@ -753,6 +772,7 @@ async function handleInstagramRequest(
 
       const mp3Button = Markup.inlineKeyboard([[Markup.button.callback(t(lang, "btn_get_mp3"), `mp3:${cached.id}`)]]);
 
+      await sendPlatformStickerIfConfigured(ctx, "instagram", settings);
       await ctx.telegram.copyMessage(ctx.chat.id, cached.chatId, cached.messageId, {
         caption,
         parse_mode: "HTML",
@@ -797,6 +817,8 @@ async function handleInstagramRequest(
     statusMsgId,
     t(lang, "carousel_detected", total)
   );
+
+  await sendPlatformStickerIfConfigured(ctx, "instagram", settings);
 
   for (let idx = 1; idx <= total; idx++) {
     let tempDirectory: string | undefined;
@@ -907,6 +929,7 @@ async function executePipeline(opts: PipelineOptions): Promise<void> {
         ? Markup.inlineKeyboard([[Markup.button.callback(t(lang, "btn_get_mp3"), `mp3:${cached.id}`)]])
         : undefined;
 
+      await sendPlatformStickerIfConfigured(ctx, platformKey || platformName, settings);
       await ctx.telegram.copyMessage(ctx.chat.id, cached.chatId, cached.messageId, {
         caption,
         parse_mode: "HTML",
@@ -987,6 +1010,7 @@ async function executePipeline(opts: PipelineOptions): Promise<void> {
 
     let lastUploadPct = 0;
     const uploadStartTime = Date.now();
+    await sendPlatformStickerIfConfigured(ctx, platformKey || platformName, settings);
     const uploadRes = await sendMediaMessage(
       ctx,
       result,
