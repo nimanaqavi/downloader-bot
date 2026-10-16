@@ -288,7 +288,7 @@ export function registerDownloadHandler(
 
   // Handle Quality Selection Callbacks
   bot.action(/^q:([a-f0-9]+):([a-z0-9]+)$/, async (ctx) => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => undefined);
     const token = ctx.match[1]!;
     const quality = ctx.match[2]! as VideoQuality;
     const tgId = ctx.from ? String(ctx.from.id) : "";
