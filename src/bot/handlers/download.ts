@@ -1,4 +1,7 @@
 import crypto from "node:crypto";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Input, Markup, type Telegraf } from "telegraf";
 import { message } from "telegraf/filters";
 import { adminErrorAlerts } from "../../admin/errorAlerts.js";
@@ -11,6 +14,7 @@ import { t, type Language } from "../../i18n/index.js";
 import type { DownloadQueue } from "../../services/downloadQueue.js";
 import type { Downloader, VideoQuality } from "../../services/downloader.js";
 import type { ForceJoinService } from "../../services/forceJoin.js";
+import { extractInstagramMedia } from "../../services/instagram.js";
 import { metricsManager } from "../../services/metrics.js";
 import type { MtprotoUploader } from "../../services/mtprotoUploader.js";
 import type { RateLimiter } from "../../services/rateLimiter.js";
@@ -840,6 +844,93 @@ async function handleInstagramRequest(
     }
   }
 
+  // 1. Fast direct Instagram extraction for posts, single photos, and mixed carousels
+  try {
+    const igData = await extractInstagramMedia(media.url, config.instagramCookiesPath);
+    if (igData && igData.items && igData.items.length > 0) {
+      const items = igData.items.slice(0, 10);
+      const total = items.length;
+
+      if (total > 1) {
+        await safeEditMessageText(
+          ctx.telegram,
+          ctx.chat.id,
+          statusMsgId,
+          t(lang, "carousel_detected", total)
+        );
+      }
+
+      await sendPlatformStickerIfConfigured(ctx, "instagram", settings);
+
+      for (let idx = 0; idx < total; idx++) {
+        const item = items[idx];
+        if (!item) continue;
+        let tempDir: string | undefined;
+
+        try {
+          tempDir = await mkdtemp(join(tmpdir(), "ig-item-"));
+          const isPhoto = item.type === "photo";
+          const ext = isPhoto ? "jpg" : "mp4";
+          const filePath = join(tempDir, `item_${idx + 1}.${ext}`);
+
+          const res = await fetch(item.url, {
+            headers: {
+              "User-Agent":
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+              Referer: "https://www.instagram.com/"
+            }
+          });
+          if (!res.ok) throw new Error(`CDN fetch failed with HTTP ${res.status}`);
+          const buf = Buffer.from(await res.arrayBuffer());
+          await writeFile(filePath, buf);
+          const fileSizeBytes = buf.length;
+
+          const itemTitle =
+            total > 1
+              ? t(lang, "carousel_item_title", idx + 1, total)
+              : igData.title || "Instagram";
+
+          const caption = buildFinalCaption({
+            title: itemTitle,
+            durationSeconds: item.duration,
+            fileSizeBytes,
+            platformName: "Instagram",
+            platformEmoji,
+            botUsername: config.botUsername,
+            isAudio: false,
+            lang
+          });
+
+          const downloadResult: DownloadResult = {
+            mediaPath: filePath,
+            videoPath: filePath,
+            mediaType: isPhoto ? "photo" : "video",
+            fileSizeBytes,
+            title: itemTitle,
+            durationSeconds: item.duration,
+            platformName: "Instagram"
+          };
+
+          await sendMediaMessage(ctx, downloadResult, caption, mtprotoUploader);
+        } catch (itemErr) {
+          console.warn(`[instagram item ${idx + 1}] failed:`, itemErr);
+          if (total === 1) throw itemErr;
+        } finally {
+          if (tempDir) {
+            await removeDirectory(tempDir).catch(() => undefined);
+          }
+        }
+      }
+
+      downloads.create(ctx.dbUser!.id, media.url, "success", undefined, "Instagram");
+      await ctx.telegram.deleteMessage(ctx.chat.id, statusMsgId).catch(() => undefined);
+      return;
+    }
+  } catch (err) {
+    console.warn("[instagram native extractor] Failed, falling back to yt-dlp pipeline:", err);
+  }
+
+  // 2. Fallback to standard yt-dlp pipeline
   const itemCount = await downloader.getMediaItemCount(media.url);
 
   if (itemCount <= 1) {
