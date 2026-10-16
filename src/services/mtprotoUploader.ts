@@ -200,4 +200,24 @@ export class MtprotoUploader {
       return { messageId: message.id, chatId };
     }, onFloodWaitNotice);
   }
+
+  async sendDocument(
+    chatId: number | string,
+    filePath: string,
+    caption: string,
+    onFloodWaitNotice?: (seconds: number) => void
+  ): Promise<UploadResponse> {
+    const client = await this.getClient();
+
+    return await this.executeWithFloodWaitRetry(async () => {
+      const message = await client.sendFile(chatId, {
+        file: filePath,
+        caption,
+        forceDocument: true,
+        parseMode: "html",
+        workers: 2
+      });
+      return { messageId: message.id, chatId };
+    }, onFloodWaitNotice);
+  }
 }

@@ -55,6 +55,8 @@ export interface DownloadResult {
   fileSizeBytes: number;
   title?: string;
   durationSeconds?: number;
+  width?: number;
+  height?: number;
   platformName?: string;
   appliedQuality?: string;
 }

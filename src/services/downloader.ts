@@ -31,6 +31,41 @@ export interface BuildArgsOptions {
   playlistItem?: number;
   isAudio: boolean;
   isYouTube: boolean;
+  isPhoto?: boolean;
+}
+
+export function detectItemMediaType(meta: {
+  ext?: string;
+  vcodec?: string;
+  acodec?: string;
+  formats?: Array<{ vcodec?: string; acodec?: string; ext?: string }>;
+  _type?: string;
+}): MediaType {
+  const ext = (meta.ext || "").toLowerCase();
+  const vcodec = (meta.vcodec || "").toLowerCase();
+  const acodec = (meta.acodec || "").toLowerCase();
+
+  if (imageExtensions.has(ext)) return "photo";
+
+  const hasVideoStream = Boolean(vcodec && vcodec !== "none");
+  const hasAudioStream = Boolean(acodec && acodec !== "none");
+
+  if (!hasVideoStream && !hasAudioStream) {
+    if (meta.formats && meta.formats.length > 0) {
+      const anyVideo = meta.formats.some((f) => f.vcodec && f.vcodec !== "none");
+      if (anyVideo) return "video";
+      const anyAudio = meta.formats.some((f) => f.acodec && f.acodec !== "none");
+      if (anyAudio) return "audio";
+      return "photo";
+    }
+    return "photo";
+  }
+
+  if (!hasVideoStream && hasAudioStream) {
+    return "audio";
+  }
+
+  return "video";
 }
 
 export function buildYtDlpArgs(options: BuildArgsOptions): string[] {
@@ -90,6 +125,11 @@ export function buildYtDlpArgs(options: BuildArgsOptions): string[] {
       "--output",
       join(options.tempDirectory, "audio.%(ext)s")
     );
+  } else if (options.isPhoto) {
+    args.push(
+      "--output",
+      join(options.tempDirectory, "media.%(ext)s")
+    );
   } else {
     args.push(
       "--remux-video",
@@ -101,7 +141,9 @@ export function buildYtDlpArgs(options: BuildArgsOptions): string[] {
     );
   }
 
-  args.push("--write-thumbnail", "--convert-thumbnails", "jpg");
+  if (!options.isPhoto) {
+    args.push("--write-thumbnail", "--convert-thumbnails", "jpg");
+  }
 
   const homeDir = homedir();
   const binDir = join(homeDir, "bin");
@@ -176,6 +218,52 @@ export class Downloader {
     }
   }
 
+  async probeItem(
+    url: string,
+    playlistItem?: number
+  ): Promise<{
+    mediaType: MediaType;
+    width?: number;
+    height?: number;
+    title?: string;
+    duration?: number;
+  }> {
+    const args = [
+      "--force-ipv4",
+      "--no-warnings",
+      "-J"
+    ];
+    if (playlistItem) {
+      args.push("--playlist-items", String(playlistItem));
+    } else {
+      args.push("--no-playlist");
+    }
+    if (this.cookiesPath && existsSync(this.cookiesPath)) {
+      args.push("--cookies", this.cookiesPath);
+    }
+    args.push(url);
+
+    try {
+      const { stdout } = await runProcess("yt-dlp", args, 25_000);
+      const json = JSON.parse(stdout);
+      const entry =
+        json._type === "playlist" && Array.isArray(json.entries) && json.entries[0]
+          ? json.entries[0]
+          : json;
+
+      const mediaType = detectItemMediaType(entry);
+      return {
+        mediaType,
+        width: typeof entry.width === "number" ? entry.width : undefined,
+        height: typeof entry.height === "number" ? entry.height : undefined,
+        title: entry.title,
+        duration: typeof entry.duration === "number" ? entry.duration : undefined
+      };
+    } catch {
+      return { mediaType: "video" };
+    }
+  }
+
   async fetchMetadata(url: string): Promise<MediaMetadata> {
     const cached = this.metadataCache.get(url);
     if (cached && Date.now() - cached.timestamp < 10 * 60 * 1000) {
@@ -236,6 +324,7 @@ export class Downloader {
     options?: {
       isInstagramCarousel?: boolean;
       playlistItem?: number;
+      isPhoto?: boolean;
       onProgress?: (percentage: number) => void;
     }
   ): Promise<DownloadResult & { tempDirectory: string; isAudio?: boolean; author?: string; downloadDurationMs: number }> {
@@ -256,6 +345,23 @@ export class Downloader {
       throw new Error(capCheck.reason || "فضای کافی روی دیسک سرور موجود نیست.");
     }
 
+    let isPhoto = options?.isPhoto ?? false;
+    let probedWidth: number | undefined;
+    let probedHeight: number | undefined;
+    let probedTitle: string | undefined;
+    let probedDuration: number | undefined;
+
+    if (!isAudio && options?.isPhoto === undefined) {
+      const probe = await this.probeItem(url, options?.playlistItem);
+      if (probe.mediaType === "photo") {
+        isPhoto = true;
+      }
+      probedWidth = probe.width;
+      probedHeight = probe.height;
+      probedTitle = probe.title;
+      probedDuration = probe.duration;
+    }
+
     const tempDirectory = await mkdtemp(join(tmpdir(), "media-bot-"));
 
     const args = buildYtDlpArgs({
@@ -267,7 +373,8 @@ export class Downloader {
       cookiesPath: this.cookiesPath,
       playlistItem: options?.playlistItem,
       isAudio,
-      isYouTube
+      isYouTube,
+      isPhoto
     });
 
     try {
@@ -293,7 +400,10 @@ export class Downloader {
       let mediaFile: string | undefined;
       let mediaType: MediaType = "video";
 
-      if (videoFile) {
+      if (isPhoto && imageFiles.length > 0) {
+        mediaFile = imageFiles[0];
+        mediaType = "photo";
+      } else if (videoFile) {
         mediaFile = videoFile;
         mediaType = "video";
       } else if (audioFile) {
@@ -342,9 +452,11 @@ export class Downloader {
         thumbnailPath,
         fileSizeBytes,
         isAudio: mediaType === "audio",
-        title: cachedMeta?.title,
+        title: cachedMeta?.title || probedTitle,
         author: cachedMeta?.author,
-        durationSeconds: cachedMeta?.duration,
+        durationSeconds: cachedMeta?.duration || probedDuration,
+        width: probedWidth,
+        height: probedHeight,
         downloadDurationMs
       };
     } catch (error) {

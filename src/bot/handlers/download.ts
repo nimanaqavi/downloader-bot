@@ -1120,6 +1120,18 @@ async function sendMediaMessage(
         onFloodWaitNotice
       );
     } else if (result.mediaType === "photo") {
+      const isOversized = result.fileSizeBytes > 10 * 1024 * 1024;
+      const isInvalidDims = Boolean(
+        result.width &&
+        result.height &&
+        (result.width + result.height > 10000 ||
+          result.width / result.height > 20 ||
+          result.height / result.width > 20)
+      );
+
+      if (isOversized || isInvalidDims) {
+        return await mtprotoUploader.sendDocument(ctx.chat.id, result.mediaPath, caption, onFloodWaitNotice);
+      }
       return await mtprotoUploader.sendPhoto(ctx.chat.id, result.mediaPath, caption, onFloodWaitNotice);
     } else {
       const res = await mtprotoUploader.sendVideo(
@@ -1153,6 +1165,24 @@ async function sendMediaMessage(
     });
     return { messageId: msg.message_id, chatId: ctx.chat.id };
   } else if (result.mediaType === "photo") {
+    const isOversized = result.fileSizeBytes > 10 * 1024 * 1024;
+    const isInvalidDims = Boolean(
+      result.width &&
+      result.height &&
+      (result.width + result.height > 10000 ||
+        result.width / result.height > 20 ||
+        result.height / result.width > 20)
+    );
+
+    if (isOversized || isInvalidDims) {
+      const msg = await ctx.replyWithDocument(Input.fromLocalFile(result.mediaPath), {
+        caption,
+        parse_mode: "HTML",
+        ...extraMarkup
+      });
+      return { messageId: msg.message_id, chatId: ctx.chat.id };
+    }
+
     const msg = await ctx.replyWithPhoto(Input.fromLocalFile(result.mediaPath), {
       caption,
       parse_mode: "HTML",
