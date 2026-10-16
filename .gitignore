@@ -10,4 +10,5 @@ scripts/askpass.*
 *.bat
 .claude/
 *.tar.gz
+backups/
 *.bak
