@@ -56,7 +56,8 @@ export function friendlyDownloadError(
     if (
       lower.includes("login required") ||
       lower.includes("checkpoint") ||
-      lower.includes("instagram")
+      lower.includes("following this account") ||
+      lower.includes("private account")
     ) {
       return t(selectedLang, "err_instagram_private", errId);
     }
