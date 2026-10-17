@@ -12,3 +12,7 @@ scripts/askpass.*
 *.tar.gz
 backups/
 *.bak
+/mimo
+/mimo.exe
+
+
