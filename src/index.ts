@@ -51,7 +51,7 @@ async function main(): Promise<void> {
     downloader: new Downloader(
       config.downloadTimeoutMs,
       config.telegramFileLimitBytes,
-      config.instagramCookiesPath,
+      config.cookiesPath,
       config.maxDurationSeconds,
       config.diskSafetyMarginBytes,
       config.maxDiskBudgetMb

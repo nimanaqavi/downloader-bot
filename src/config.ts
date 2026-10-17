@@ -4,7 +4,7 @@ import { z } from "zod";
 
 const booleanString = z
   .string()
-  .default("false")
+  .default("true")
   .transform((value) => value.toLowerCase() === "true");
 
 const schema = z.object({
@@ -14,10 +14,11 @@ const schema = z.object({
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(3),
   RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
   TELEGRAM_FILE_LIMIT_MB: z.coerce.number().positive().max(2000).default(500),
-  TELEGRAM_API_ID: z.coerce.number().int().default(17349),
-  TELEGRAM_API_HASH: z.string().default("344583e45741c457fe1862106095a5eb"),
+  TELEGRAM_API_ID: z.coerce.number().int().default(2040),
+  TELEGRAM_API_HASH: z.string().default("b18441a1ff607e10a989891a5462e627"),
   DOWNLOAD_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(300),
   AUTO_UPDATE_YTDLP: booleanString,
+  COOKIES_PATH: z.string().optional(),
   INSTAGRAM_COOKIES_PATH: z.string().optional(),
   MAX_DURATION_SECONDS: z.coerce.number().int().positive().default(10800),
   DISK_SAFETY_MARGIN_MB: z.coerce.number().int().positive().default(100),
@@ -52,8 +53,15 @@ export const config = {
   telegramApiHash: parsed.data.TELEGRAM_API_HASH,
   downloadTimeoutMs: parsed.data.DOWNLOAD_TIMEOUT_SECONDS * 1000,
   autoUpdateYtDlp: parsed.data.AUTO_UPDATE_YTDLP,
+  cookiesPath: parsed.data.COOKIES_PATH
+    ? resolve(parsed.data.COOKIES_PATH)
+    : parsed.data.INSTAGRAM_COOKIES_PATH
+    ? resolve(parsed.data.INSTAGRAM_COOKIES_PATH)
+    : undefined,
   instagramCookiesPath: parsed.data.INSTAGRAM_COOKIES_PATH
     ? resolve(parsed.data.INSTAGRAM_COOKIES_PATH)
+    : parsed.data.COOKIES_PATH
+    ? resolve(parsed.data.COOKIES_PATH)
     : undefined,
   maxDurationSeconds: parsed.data.MAX_DURATION_SECONDS,
   diskSafetyMarginBytes: parsed.data.DISK_SAFETY_MARGIN_MB * 1024 * 1024,

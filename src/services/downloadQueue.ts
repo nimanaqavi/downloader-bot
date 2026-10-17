@@ -1,3 +1,5 @@
+import { triggerGC } from "../utils/gc.js";
+
 type Task<T> = () => Promise<T>;
 
 export class DownloadQueue {
@@ -49,6 +51,7 @@ export class DownloadQueue {
         this.activeCount--;
         const next = this.queue.shift();
         if (next) next.resolve();
+        triggerGC();
       }
     } finally {
       if (uKey) {

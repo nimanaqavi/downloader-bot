@@ -1,4 +1,5 @@
 import { gramjsMonitor } from "./gramjsMonitor.js";
+import { triggerGC } from "../utils/gc.js";
 
 export interface UploadResponse {
   messageId: number;
@@ -20,10 +21,12 @@ export interface VideoMetadata {
 export class MtprotoUploader {
   private client: any = null;
   private connectingPromise: Promise<any> | null = null;
+  private idleTimer: NodeJS.Timeout | null = null;
+  private readonly IDLE_DISCONNECT_MS = 60_000; // 60 seconds
 
   constructor(
-    private readonly apiId: number,
-    private readonly apiHash: string,
+    private readonly apiId: number = 2040,
+    private readonly apiHash: string = "b18441a1ff607e10a989891a5462e627",
     private readonly botToken: string
   ) {}
 
@@ -42,7 +45,7 @@ export class MtprotoUploader {
         const { StringSession } = await import("telegram/sessions/index.js");
 
         const stringSession = new StringSession("");
-        const client = new TelegramClient(stringSession, this.apiId, this.apiHash, {
+        const client = new TelegramClient(stringSession, this.apiId || 2040, this.apiHash || "b18441a1ff607e10a989891a5462e627", {
           connectionRetries: 5,
           useWSS: false,
           autoReconnect: true
@@ -66,10 +69,46 @@ export class MtprotoUploader {
     return this.connectingPromise;
   }
 
+  private resetIdleTimer(): void {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+    this.idleTimer = setTimeout(() => {
+      this.disconnectIfIdle().catch(() => undefined);
+    }, this.IDLE_DISCONNECT_MS);
+    this.idleTimer.unref();
+  }
+
+  public async disconnectIfIdle(): Promise<void> {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+    if (this.client) {
+      try {
+        if (this.client.connected) {
+          await this.client.disconnect();
+        }
+      } catch {
+        // Ignore disconnect error
+      } finally {
+        this.client = null;
+        triggerGC();
+        console.info("[mtproto] Idle timeout reached (60s). Disconnected GramJS client and triggered GC.");
+      }
+    }
+  }
+
   private async executeWithFloodWaitRetry<T>(
     operation: () => Promise<T>,
     onFloodWaitNotice?: (seconds: number) => void
   ): Promise<T> {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+
     try {
       return await operation();
     } catch (err: any) {
@@ -102,6 +141,8 @@ export class MtprotoUploader {
       const errName = err?.name || err?.errorMessage || "UPLOAD_ERROR";
       gramjsMonitor.recordUploadError(errName);
       throw err;
+    } finally {
+      this.resetIdleTimer();
     }
   }
 
@@ -135,7 +176,7 @@ export class MtprotoUploader {
         supportsStreaming: true,
         attributes,
         parseMode: "html",
-        workers: 2, // 2 workers optimal for 256MB RAM
+        workers: 1, // Single worker strictly enforced for 256MB RAM environment
         progressCallback: progressCallback
           ? (progress: number) => progressCallback(Math.round(progress * 100))
           : undefined
@@ -173,7 +214,7 @@ export class MtprotoUploader {
         thumb: thumbnailPath,
         attributes,
         parseMode: "html",
-        workers: 2,
+        workers: 1, // Single worker strictly enforced for 256MB RAM environment
         progressCallback: progressCallback
           ? (progress: number) => progressCallback(Math.round(progress * 100))
           : undefined
@@ -195,7 +236,7 @@ export class MtprotoUploader {
         file: photoPath,
         caption,
         parseMode: "html",
-        workers: 2
+        workers: 1
       });
       return { messageId: message.id, chatId };
     }, onFloodWaitNotice);
@@ -215,7 +256,7 @@ export class MtprotoUploader {
         caption,
         forceDocument: true,
         parseMode: "html",
-        workers: 2
+        workers: 1
       });
       return { messageId: message.id, chatId };
     }, onFloodWaitNotice);
