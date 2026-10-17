@@ -4,6 +4,7 @@ module.exports = {
       name: "mimo-bot",
       script: "dist/src/index.js",
       cwd: "/home/telbot/mimo",
+      node_args: "--max-old-space-size=96 --expose-gc",
       env: {
         NODE_ENV: "production",
         PATH: "/home/telbot/bin:/home/telbot/.local/bin:" + (process.env.PATH || "")

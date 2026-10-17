@@ -50,12 +50,16 @@ export async function parseSpotifyUrl(rawUrl: string): Promise<SpotifyParseResul
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 6000);
 
-      const res = await fetch(targetUrl, {
-        method: "HEAD",
-        redirect: "manual",
-        signal: controller.signal
-      });
-      clearTimeout(timeout);
+      let res: Response;
+      try {
+        res = await fetch(targetUrl, {
+          method: "HEAD",
+          redirect: "manual",
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
 
       const location = res.headers.get("location");
       if (location) {
@@ -104,16 +108,20 @@ export async function parseSpotifyUrl(rawUrl: string): Promise<SpotifyParseResul
 export async function fetchSpotifyMetadata(normalizedUrl: string): Promise<SpotifyTrackInfo> {
   // Strategy A: oEmbed with 2 retries (total 3 attempts) and backoff
   for (let attempt = 1; attempt <= 3; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+
     try {
       const oembedUrl = `https://open.spotify.com/oembed?url=${encodeURIComponent(normalizedUrl)}`;
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 6000);
-
-      const res = await fetch(oembedUrl, {
-        signal: controller.signal,
-        headers: { "User-Agent": "Mozilla/5.0" }
-      });
-      clearTimeout(timeout);
+      let res: Response;
+      try {
+        res = await fetch(oembedUrl, {
+          signal: controller.signal,
+          headers: { "User-Agent": "Mozilla/5.0" }
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
 
       if (res.ok) {
         const json = (await res.json()) as any;
@@ -139,14 +147,18 @@ export async function fetchSpotifyMetadata(normalizedUrl: string): Promise<Spoti
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 7000);
 
-      const pageRes = await fetch(normalizedUrl, {
-        signal: controller.signal,
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-      });
-      clearTimeout(timeout);
+      let pageRes: Response;
+      try {
+        pageRes = await fetch(normalizedUrl, {
+          signal: controller.signal,
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+          }
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
 
       if (pageRes.ok) {
         const html = await pageRes.text();

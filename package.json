@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "start": "node dist/src/index.js",
+    "start": "node --max-old-space-size=96 --expose-gc dist/src/index.js",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test dist/tests/*.test.js"

@@ -78,14 +78,18 @@ export async function downloadTikTokViaTikWm(
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10_000); // 10s strict timeout
 
-    const res = await fetch(apiUrl, {
-      signal: controller.signal,
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-      }
-    });
-    clearTimeout(timeout);
+    let res: Response;
+    try {
+      res = await fetch(apiUrl, {
+        signal: controller.signal,
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
 
     if (!res.ok) {
       tikWmCircuit.recordFailure();
@@ -131,11 +135,15 @@ export async function downloadTikTokViaTikWm(
     const downloadController = new AbortController();
     const downloadTimeout = setTimeout(() => downloadController.abort(), 30_000);
 
-    const videoRes = await fetch(videoPlayUrl, {
-      signal: downloadController.signal,
-      redirect: "follow"
-    });
-    clearTimeout(downloadTimeout);
+    let videoRes: Response;
+    try {
+      videoRes = await fetch(videoPlayUrl, {
+        signal: downloadController.signal,
+        redirect: "follow"
+      });
+    } finally {
+      clearTimeout(downloadTimeout);
+    }
 
     if (!videoRes.ok || !videoRes.body) {
       tikWmCircuit.recordFailure();

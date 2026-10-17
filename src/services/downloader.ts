@@ -1,10 +1,12 @@
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdtemp, open, readdir, rename, stat } from "node:fs/promises";
+import { mkdtemp, open, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DownloadResult, MediaType } from "../types/index.js";
-import { calculateSafeDownloadCap } from "../utils/disk.js";
+import { adjustCachedUsedMb, calculateSafeDownloadCap } from "../utils/disk.js";
 import { removeDirectory } from "../utils/files.js";
+import { triggerGC } from "../utils/gc.js";
 import { runProcess } from "./process.js";
 
 const imageExtensions = new Set(["jpg", "jpeg", "png", "webp"]);
@@ -32,6 +34,7 @@ export interface BuildArgsOptions {
   isAudio: boolean;
   isYouTube: boolean;
   isPhoto?: boolean;
+  infoJsonPath?: string;
 }
 
 export function detectItemMediaType(meta: {
@@ -94,10 +97,13 @@ export function buildYtDlpArgs(options: BuildArgsOptions): string[] {
     "--no-warnings",
     "--no-mtime",
     "--no-cache-dir",
+    "--no-part",
+    "--buffer-size",
+    "16K",
     "--socket-timeout",
     "30",
     "--concurrent-fragments",
-    "4", // 4 concurrent fragments for fast HLS/DASH streaming
+    "1",
     "--match-filter",
     `duration <=? ${options.maxDurationSeconds} & !is_live`,
     "--max-filesize",
@@ -106,6 +112,12 @@ export function buildYtDlpArgs(options: BuildArgsOptions): string[] {
     "--format-sort",
     sortRule
   ];
+
+  if (options.isYouTube) {
+    args.push("--extractor-args", "youtube:player_client=ios,mweb,web_creator");
+  }
+
+  args.push("--postprocessor-args", "ffmpeg:-threads 1");
 
   if (options.url.includes("tiktok.com")) {
     args.push("--impersonate", "chrome");
@@ -156,7 +168,12 @@ export function buildYtDlpArgs(options: BuildArgsOptions): string[] {
     args.push("--cookies", options.cookiesPath);
   }
 
-  args.push(options.url);
+  if (options.infoJsonPath && existsSync(options.infoJsonPath)) {
+    args.push("--load-info-json", options.infoJsonPath);
+  } else {
+    args.push(options.url);
+  }
+
   return args;
 }
 
@@ -167,6 +184,7 @@ export interface MediaMetadata {
   uploader?: string;
   filesizeApprox?: number;
   thumbnailUrl?: string;
+  infoJsonPath?: string;
 }
 
 export class Downloader {
@@ -201,12 +219,16 @@ export class Downloader {
       return cached.data.itemCount;
     }
 
+    const isYt = /(?:youtube\.com|youtu\.be)/i.test(url);
     const args = [
       "--force-ipv4",
       "--no-warnings",
       "--flat-playlist",
       "-J"
     ];
+    if (isYt) {
+      args.push("--extractor-args", "youtube:player_client=ios,mweb,web_creator");
+    }
     if (url.includes("tiktok.com")) {
       args.push("--impersonate", "chrome");
     }
@@ -281,18 +303,22 @@ export class Downloader {
       return cached.data;
     }
 
+    const isYt = /(?:youtube\.com|youtu\.be)/i.test(url);
     const args = [
       "--force-ipv4",
       "--no-warnings",
       "-J"
     ];
-    if (url.includes("tiktok.com")) {
-      args.push("--impersonate", "chrome");
+    if (isYt) {
+      args.push("--extractor-args", "youtube:player_client=ios,mweb,web_creator");
     }
     if (playlistItem) {
       args.push("--playlist-items", String(playlistItem));
     } else {
       args.push("--no-playlist");
+    }
+    if (url.includes("tiktok.com")) {
+      args.push("--impersonate", "chrome");
     }
     if (this.cookiesPath && existsSync(this.cookiesPath)) {
       args.push("--cookies", this.cookiesPath);
@@ -328,13 +354,16 @@ export class Downloader {
       return cached.meta;
     }
 
+    const isYt = /(?:youtube\.com|youtu\.be)/i.test(url);
     const args = [
       "--force-ipv4",
       "--no-warnings",
       "--no-playlist",
-      "--print",
-      "%(title)s\t%(duration)s\t%(artist,creator,uploader,channel)s\t%(filesize,filesize_approx)s\t%(thumbnail)s\t%(id)s"
+      "-J"
     ];
+    if (isYt) {
+      args.push("--extractor-args", "youtube:player_client=ios,mweb,web_creator");
+    }
     if (url.includes("tiktok.com")) {
       args.push("--impersonate", "chrome");
     }
@@ -345,20 +374,27 @@ export class Downloader {
 
     try {
       const { stdout } = await runProcess("yt-dlp", args, 25_000);
-      const firstLine = stdout.trim().split("\n")[0] || "";
-      const parts = firstLine.split("\t");
-      const title = parts[0]?.trim() || "مدیا";
-      const duration = parts[1] && !isNaN(Number(parts[1])) ? Number(parts[1]) : undefined;
-      const rawAuthor = parts[2]?.trim();
+      const json = JSON.parse(stdout);
+      const title = json.title || "مدیا";
+      const duration = typeof json.duration === "number" ? json.duration : undefined;
+      const rawAuthor = json.artist || json.creator || json.uploader || json.channel;
       const author = rawAuthor && rawAuthor !== "NA" ? rawAuthor : undefined;
-      const rawSize = parts[3]?.trim();
-      const filesizeApprox = rawSize && !isNaN(Number(rawSize)) ? Number(rawSize) : undefined;
-      let thumbnailUrl = parts[4]?.trim() || undefined;
-      const videoId = parts[5]?.trim();
+      const rawSize = json.filesize || json.filesize_approx;
+      const filesizeApprox = typeof rawSize === "number" ? rawSize : undefined;
+      let thumbnailUrl = json.thumbnail || undefined;
+      const videoId = json.id;
 
-      // For YouTube, ensure standard medium thumbnail (480x360) is available
       if ((!thumbnailUrl || !thumbnailUrl.startsWith("https://")) && videoId) {
         thumbnailUrl = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+      }
+
+      let infoJsonPath: string | undefined;
+      try {
+        const hash = createHash("md5").update(url).digest("hex");
+        infoJsonPath = join(tmpdir(), `ytdlp-info-${hash}.json`);
+        await writeFile(infoJsonPath, stdout, "utf8");
+      } catch {
+        // Fallback to direct URL if write fails
       }
 
       const meta: MediaMetadata = {
@@ -367,15 +403,64 @@ export class Downloader {
         author,
         uploader: author,
         filesizeApprox,
-        thumbnailUrl
+        thumbnailUrl,
+        infoJsonPath
       };
 
       this.metadataCache.set(url, { meta, timestamp: Date.now() });
       return meta;
     } catch {
-      return {
-        title: "مدیا"
-      };
+      // Fallback to print command if -J extraction fails
+      const fallbackArgs = [
+        "--force-ipv4",
+        "--no-warnings",
+        "--no-playlist",
+        "--print",
+        "%(title)s\t%(duration)s\t%(artist,creator,uploader,channel)s\t%(filesize,filesize_approx)s\t%(thumbnail)s\t%(id)s"
+      ];
+      if (isYt) {
+        fallbackArgs.push("--extractor-args", "youtube:player_client=ios,mweb,web_creator");
+      }
+      if (url.includes("tiktok.com")) {
+        fallbackArgs.push("--impersonate", "chrome");
+      }
+      if (this.cookiesPath && existsSync(this.cookiesPath)) {
+        fallbackArgs.push("--cookies", this.cookiesPath);
+      }
+      fallbackArgs.push(url);
+
+      try {
+        const { stdout } = await runProcess("yt-dlp", fallbackArgs, 20_000);
+        const firstLine = stdout.trim().split("\n")[0] || "";
+        const parts = firstLine.split("\t");
+        const title = parts[0]?.trim() || "مدیا";
+        const duration = parts[1] && !isNaN(Number(parts[1])) ? Number(parts[1]) : undefined;
+        const rawAuthor = parts[2]?.trim();
+        const author = rawAuthor && rawAuthor !== "NA" ? rawAuthor : undefined;
+        const rawSize = parts[3]?.trim();
+        const filesizeApprox = rawSize && !isNaN(Number(rawSize)) ? Number(rawSize) : undefined;
+        let thumbnailUrl = parts[4]?.trim() || undefined;
+        const videoId = parts[5]?.trim();
+
+        if ((!thumbnailUrl || !thumbnailUrl.startsWith("https://")) && videoId) {
+          thumbnailUrl = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+        }
+
+        const meta: MediaMetadata = {
+          title,
+          duration,
+          author,
+          uploader: author,
+          filesizeApprox,
+          thumbnailUrl
+        };
+        this.metadataCache.set(url, { meta, timestamp: Date.now() });
+        return meta;
+      } catch {
+        return {
+          title: "مدیا"
+        };
+      }
     }
   }
 
@@ -423,6 +508,12 @@ export class Downloader {
       probedDuration = probe.duration;
     }
 
+    const cachedMeta = this.metadataCache.get(url)?.meta;
+    let infoJsonPath =
+      cachedMeta?.infoJsonPath && existsSync(cachedMeta.infoJsonPath) && !options?.playlistItem
+        ? cachedMeta.infoJsonPath
+        : undefined;
+
     const tempDirectory = await mkdtemp(join(tmpdir(), "media-bot-"));
 
     const args = buildYtDlpArgs({
@@ -435,11 +526,36 @@ export class Downloader {
       playlistItem: options?.playlistItem,
       isAudio,
       isYouTube,
-      isPhoto
+      isPhoto,
+      infoJsonPath
     });
 
     try {
-      const processResult = await runProcess("yt-dlp", args, this.timeoutMs, options?.onProgress);
+      let processResult;
+      try {
+        processResult = await runProcess("yt-dlp", args, this.timeoutMs, options?.onProgress);
+      } catch (dlErr) {
+        // If download with load-info-json failed, fall back to URL download
+        if (infoJsonPath) {
+          console.warn("[downloader] Info-json download failed, falling back to direct URL:", dlErr);
+          const fallbackArgs = buildYtDlpArgs({
+            url,
+            quality,
+            tempDirectory,
+            maxDurationSeconds: this.maxDurationSeconds,
+            safeCapBytes: capCheck.safeCapBytes,
+            cookiesPath: this.cookiesPath,
+            playlistItem: options?.playlistItem,
+            isAudio,
+            isYouTube,
+            isPhoto
+          });
+          processResult = await runProcess("yt-dlp", fallbackArgs, this.timeoutMs, options?.onProgress);
+        } else {
+          throw dlErr;
+        }
+      }
+
       if (processResult.stdout.includes("does not pass filter")) {
         throw new Error(
           "مدت زمان محتوا بیشتر از حد مجاز (حداکثر ۳ ساعت) است یا این محتوا یک پخش زنده (لایو) می‌باشد."
@@ -517,6 +633,9 @@ export class Downloader {
       const filePath = join(tempDirectory, mediaFile);
       const fileSizeBytes = (await stat(filePath)).size;
 
+      // Adjust in-memory disk usage cache with newly downloaded file
+      adjustCachedUsedMb(fileSizeBytes);
+
       if (fileSizeBytes > capCheck.safeCapBytes) {
         const sizeMb = Math.round(fileSizeBytes / 1048576);
         const maxMb = Math.round(capCheck.safeCapBytes / 1048576);
@@ -534,7 +653,6 @@ export class Downloader {
         }
       }
 
-      const cachedMeta = this.metadataCache.get(url)?.meta;
       const downloadDurationMs = Date.now() - startDownloadTime;
 
       return {
@@ -555,6 +673,15 @@ export class Downloader {
     } catch (error) {
       await removeDirectory(tempDirectory);
       throw error;
+    } finally {
+      if (infoJsonPath) {
+        try {
+          await rm(infoJsonPath, { force: true });
+        } catch {
+          // Ignore removal error
+        }
+      }
+      triggerGC();
     }
   }
 }

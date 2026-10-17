@@ -22,6 +22,7 @@ import { resolveSpotifyTrack, SpotifyError } from "../../services/spotify.js";
 import { downloadTikTokViaTikWm } from "../../services/tiktok.js";
 import type { BotContext, DownloadResult } from "../../types/index.js";
 import { removeDirectory } from "../../utils/files.js";
+import { triggerGC } from "../../utils/gc.js";
 import {
   buildFinalCaption,
   buildQualityCardText,
@@ -619,6 +620,8 @@ async function handleSpotify(
     await safeEditMessageText(ctx.telegram, ctx.chat.id, statusMsg.message_id, userErrorText);
     adminErrorAlerts.reportPlatformError(bot, adminIds, "Spotify", errorId, error);
     console.error(`[spotify error ${errorId}] ${ctx.from.id} ${media.url}:`, error?.message || error);
+  } finally {
+    triggerGC();
   }
 }
 
@@ -709,6 +712,7 @@ async function handleTikTok(
 
         await ctx.telegram.deleteMessage(ctx.chat.id, statusMsgId).catch(() => undefined);
         if (result.tempDirectory) await removeDirectory(result.tempDirectory).catch(() => undefined);
+        triggerGC();
         return;
       }
     } catch (err) {
@@ -924,6 +928,7 @@ async function handleInstagramRequest(
 
       downloads.create(ctx.dbUser!.id, media.url, "success", undefined, "Instagram");
       await ctx.telegram.deleteMessage(ctx.chat.id, statusMsgId).catch(() => undefined);
+      triggerGC();
       return;
     }
   } catch (err) {
@@ -1001,6 +1006,7 @@ async function handleInstagramRequest(
 
   downloads.create(ctx.dbUser!.id, media.url, "success", undefined, "Instagram");
   await ctx.telegram.deleteMessage(ctx.chat.id, statusMsgId).catch(() => undefined);
+  triggerGC();
 }
 
 interface PipelineOptions {
@@ -1262,8 +1268,12 @@ async function executePipeline(opts: PipelineOptions): Promise<void> {
     if (tempDirectory) {
       await removeDirectory(tempDirectory).catch(() => undefined);
     }
+    triggerGC();
   }
 }
+
+const TELEGRAF_MEDIA_LIMIT_BYTES = 45 * 1024 * 1024; // 45 MB safe limit for Telegraf direct HTTP streaming
+const TELEGRAF_PHOTO_LIMIT_BYTES = 10 * 1024 * 1024; // 10 MB limit for Telegraf photo methods
 
 async function sendMediaMessage(
   ctx: any,
@@ -1276,7 +1286,79 @@ async function sendMediaMessage(
   onFloodWaitNotice?: (seconds: number) => void
 ): Promise<{ messageId: number; chatId: string | number } | undefined> {
   const isAudio = result.mediaType === "audio";
+  const isPhoto = result.mediaType === "photo";
+  const fileSize = result.fileSizeBytes || 0;
 
+  // 1. Photo handling: <= 10MB direct Telegraf replyWithPhoto, else document / MTProto
+  if (isPhoto) {
+    const isOversized = fileSize > TELEGRAF_PHOTO_LIMIT_BYTES;
+    const isInvalidDims = Boolean(
+      result.width &&
+      result.height &&
+      (result.width + result.height > 10000 ||
+        result.width / result.height > 20 ||
+        result.height / result.width > 20)
+    );
+
+    if (!isOversized && !isInvalidDims) {
+      try {
+        const msg = await ctx.replyWithPhoto(Input.fromLocalFile(result.mediaPath), {
+          caption,
+          parse_mode: "HTML",
+          ...extraMarkup
+        });
+        return { messageId: msg.message_id, chatId: ctx.chat.id };
+      } catch (err) {
+        console.warn("[upload] Telegraf photo send failed, trying document fallback:", err);
+      }
+    }
+
+    // Photo is oversized or invalid dimensions: send as document via Telegraf HTTP stream if <= 45MB
+    if (fileSize <= TELEGRAF_MEDIA_LIMIT_BYTES) {
+      const msg = await ctx.replyWithDocument(Input.fromLocalFile(result.mediaPath), {
+        caption,
+        parse_mode: "HTML",
+        ...extraMarkup
+      });
+      return { messageId: msg.message_id, chatId: ctx.chat.id };
+    } else {
+      return await mtprotoUploader.sendDocument(ctx.chat.id, result.mediaPath, caption, onFloodWaitNotice);
+    }
+  }
+
+  // 2. Audio and Video <= 45MB: send directly via Telegraf HTTP stream (GramJS is NOT connected/woken up)
+  if (fileSize <= TELEGRAF_MEDIA_LIMIT_BYTES) {
+    try {
+      if (isAudio) {
+        const msg = await ctx.replyWithAudio(Input.fromLocalFile(result.mediaPath), {
+          ...(result.thumbnailPath ? { thumbnail: Input.fromLocalFile(result.thumbnailPath) } : {}),
+          title: audioMeta?.title,
+          performer: audioMeta?.performer,
+          duration: audioMeta?.duration,
+          caption,
+          parse_mode: "HTML",
+          ...extraMarkup
+        });
+        return { messageId: msg.message_id, chatId: ctx.chat.id };
+      } else {
+        const msg = await ctx.replyWithVideo(Input.fromLocalFile(result.mediaPath), {
+          ...(result.thumbnailPath ? { thumbnail: Input.fromLocalFile(result.thumbnailPath) } : {}),
+          supports_streaming: true,
+          duration: result.durationSeconds,
+          width: result.width,
+          height: result.height,
+          caption,
+          parse_mode: "HTML",
+          ...extraMarkup
+        });
+        return { messageId: msg.message_id, chatId: ctx.chat.id };
+      }
+    } catch (httpErr) {
+      console.warn("[upload] Telegraf HTTP send failed, falling back to MTProto:", httpErr);
+    }
+  }
+
+  // 3. Audio and Video > 45MB (or fallback if Telegraf failed): use MtprotoUploader (GramJS)
   try {
     if (isAudio) {
       return await mtprotoUploader.sendAudio(
@@ -1288,20 +1370,6 @@ async function sendMediaMessage(
         audioMeta,
         onFloodWaitNotice
       );
-    } else if (result.mediaType === "photo") {
-      const isOversized = result.fileSizeBytes > 10 * 1024 * 1024;
-      const isInvalidDims = Boolean(
-        result.width &&
-        result.height &&
-        (result.width + result.height > 10000 ||
-          result.width / result.height > 20 ||
-          result.height / result.width > 20)
-      );
-
-      if (isOversized || isInvalidDims) {
-        return await mtprotoUploader.sendDocument(ctx.chat.id, result.mediaPath, caption, onFloodWaitNotice);
-      }
-      return await mtprotoUploader.sendPhoto(ctx.chat.id, result.mediaPath, caption, onFloodWaitNotice);
     } else {
       const res = await mtprotoUploader.sendVideo(
         ctx.chat.id,
@@ -1318,54 +1386,7 @@ async function sendMediaMessage(
       return res;
     }
   } catch (err) {
-    console.warn("[upload] MTProto upload failed, falling back to HTTP Bot API:", err);
-  }
-
-  // Telegraf HTTP Fallback
-  if (isAudio) {
-    const msg = await ctx.replyWithAudio(Input.fromLocalFile(result.mediaPath), {
-      ...(result.thumbnailPath ? { thumbnail: Input.fromLocalFile(result.thumbnailPath) } : {}),
-      title: audioMeta?.title,
-      performer: audioMeta?.performer,
-      duration: audioMeta?.duration,
-      caption,
-      parse_mode: "HTML",
-      ...extraMarkup
-    });
-    return { messageId: msg.message_id, chatId: ctx.chat.id };
-  } else if (result.mediaType === "photo") {
-    const isOversized = result.fileSizeBytes > 10 * 1024 * 1024;
-    const isInvalidDims = Boolean(
-      result.width &&
-      result.height &&
-      (result.width + result.height > 10000 ||
-        result.width / result.height > 20 ||
-        result.height / result.width > 20)
-    );
-
-    if (isOversized || isInvalidDims) {
-      const msg = await ctx.replyWithDocument(Input.fromLocalFile(result.mediaPath), {
-        caption,
-        parse_mode: "HTML",
-        ...extraMarkup
-      });
-      return { messageId: msg.message_id, chatId: ctx.chat.id };
-    }
-
-    const msg = await ctx.replyWithPhoto(Input.fromLocalFile(result.mediaPath), {
-      caption,
-      parse_mode: "HTML",
-      ...extraMarkup
-    });
-    return { messageId: msg.message_id, chatId: ctx.chat.id };
-  } else {
-    const msg = await ctx.replyWithVideo(Input.fromLocalFile(result.mediaPath), {
-      ...(result.thumbnailPath ? { thumbnail: Input.fromLocalFile(result.thumbnailPath) } : {}),
-      supports_streaming: true,
-      caption,
-      parse_mode: "HTML",
-      ...extraMarkup
-    });
-    return { messageId: msg.message_id, chatId: ctx.chat.id };
+    console.error("[upload] MTProto upload failed:", err);
+    throw err;
   }
 }

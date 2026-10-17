@@ -7,7 +7,14 @@ const execFileAsync = promisify(execFile);
 
 let cachedUsedMb: number | null = null;
 let lastUsedCheckTime = 0;
-const CACHE_TTL_MS = 60_000; // Cache du result for 60 seconds
+const CACHE_TTL_MS = 600_000; // Cache du result for 10 minutes (600,000 ms)
+
+export function adjustCachedUsedMb(bytesDelta: number): void {
+  if (cachedUsedMb !== null) {
+    const deltaMb = bytesDelta / (1024 * 1024);
+    cachedUsedMb = Math.max(0, Math.round((cachedUsedMb + deltaMb) * 10) / 10);
+  }
+}
 
 export async function getAccountUsedMb(): Promise<number> {
   const now = Date.now();
