@@ -98,6 +98,7 @@ export function buildYtDlpArgs(options: BuildArgsOptions): string[] {
     "--no-mtime",
     "--no-cache-dir",
     "--no-part",
+    "--no-js-runtimes",
     "--buffer-size",
     "16K",
     "--socket-timeout",
@@ -223,6 +224,7 @@ export class Downloader {
     const args = [
       "--force-ipv4",
       "--no-warnings",
+      "--no-js-runtimes",
       "--flat-playlist",
       "-J"
     ];
@@ -307,6 +309,7 @@ export class Downloader {
     const args = [
       "--force-ipv4",
       "--no-warnings",
+      "--no-js-runtimes",
       "-J"
     ];
     if (isYt) {
@@ -359,6 +362,7 @@ export class Downloader {
       "--force-ipv4",
       "--no-warnings",
       "--no-playlist",
+      "--no-js-runtimes",
       "-J"
     ];
     if (isYt) {

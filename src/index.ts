@@ -24,6 +24,35 @@ process.on("unhandledRejection", (reason) => {
 });
 
 async function main(): Promise<void> {
+  const webhookDomain = process.env.WEBHOOK_DOMAIN;
+  const port = process.env.PORT ? Number(process.env.PORT) : undefined;
+  const host = process.env.IP || process.env.HOST || "0.0.0.0";
+
+  let server: http.Server | undefined;
+  let webhookMiddleware: ((req: any, res: any) => void) | undefined;
+
+  // Immediately bind HTTP server if PORT is provided for Alwaysdata healthcheck
+  if (port || webhookDomain) {
+    const listenPort = port || 3000;
+    server = http.createServer((req, res) => {
+      if (req.method === "GET") {
+        res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("✅ ربات تلگرام روشن و آماده است!");
+        return;
+      }
+      if (webhookMiddleware) {
+        webhookMiddleware(req, res);
+      } else {
+        res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("Initializing...");
+      }
+    });
+
+    server.listen(listenPort, host, () => {
+      console.info(`[startup] HTTP Server listening on ${host}:${listenPort}`);
+    });
+  }
+
   // 1. Startup cleanup of leftover temp directories from prior crashed runs / OOM
   await cleanupOrphanedTempDirs();
 
@@ -62,8 +91,6 @@ async function main(): Promise<void> {
 
   await registerBotCommandsAndMenu(bot, config.adminUserIds);
 
-  let server: http.Server | undefined;
-
   const shutdown = (signal: string) => {
     console.info(`[shutdown] Received ${signal}, killing active processes...`);
     killAllActiveProcesses();
@@ -87,29 +114,14 @@ async function main(): Promise<void> {
   process.once("SIGINT", () => shutdown("SIGINT"));
   process.once("SIGTERM", () => shutdown("SIGTERM"));
 
-  const webhookDomain = process.env.WEBHOOK_DOMAIN;
   if (webhookDomain) {
-    const port = Number(process.env.PORT) || 3000;
-    const host = process.env.IP || "0.0.0.0";
     const webhookUrl = `https://${webhookDomain}/`;
-
     await bot.telegram.setWebhook(webhookUrl);
     console.info(`[startup] Webhook registered with Telegram: ${webhookUrl}`);
-
-    const webhookMiddleware = bot.webhookCallback("/");
-    server = http.createServer((req, res) => {
-      if (req.method === "GET") {
-        res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-        res.end("✅ ربات تلگرام روشن و آماده است!");
-        return;
-      }
-      webhookMiddleware(req, res);
-    });
-
-    server.listen(port, host, () => {
-      console.info(`[startup] HTTP Server listening on ${host}:${port}`);
-    });
+    webhookMiddleware = bot.webhookCallback("/");
   } else {
+    // Clear any stale webhook so polling works immediately
+    await bot.telegram.deleteWebhook({ drop_pending_updates: false }).catch(() => undefined);
     await bot.launch();
     console.info("[startup] Telegram bot is running via polling");
   }
