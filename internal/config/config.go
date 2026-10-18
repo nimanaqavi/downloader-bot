@@ -32,6 +32,7 @@ type Config struct {
 	WebhookDomain          string
 	Port                   string
 	Host                   string
+	TempDir                string
 }
 
 // LoadEnvFile optionally loads key-value pairs from a .env file into the environment
@@ -53,7 +54,7 @@ func LoadEnvFile(path string) {
 			k := strings.TrimSpace(parts[0])
 			v := strings.TrimSpace(parts[1])
 			v = strings.Trim(v, `"'`)
-			if os.Getenv(k) == "" {
+			if k == "TMPDIR" || os.Getenv(k) == "" {
 				os.Setenv(k, v)
 			}
 		}
@@ -131,6 +132,12 @@ func Load() (*Config, error) {
 		host = "0.0.0.0"
 	}
 
+	tmpDir := os.Getenv("TMPDIR")
+	if tmpDir == "" {
+		tmpDir = "./tmp"
+	}
+	absTmpDir, _ := filepath.Abs(tmpDir)
+
 	return &Config{
 		BotToken:               botToken,
 		AdminUserIDs:           adminMap,
@@ -154,6 +161,7 @@ func Load() (*Config, error) {
 		WebhookDomain:          webhookDomain,
 		Port:                   port,
 		Host:                   host,
+		TempDir:                absTmpDir,
 	}, nil
 }
 

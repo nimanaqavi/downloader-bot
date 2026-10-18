@@ -125,7 +125,7 @@ func (d *Downloader) FetchMetadata(ctx context.Context, mediaURL string) (*Metad
 	}
 	d.metaCacheMu.RUnlock()
 
-	tmpDir, err := os.MkdirTemp("", "mimo-meta-")
+	tmpDir, err := os.MkdirTemp(d.cfg.TempDir, "mimo-meta-")
 	if err != nil {
 		return nil, fmt.Errorf("create temp meta dir: %w", err)
 	}
@@ -284,7 +284,7 @@ func (d *Downloader) Download(
 		return nil, fmt.Errorf("فضای خالی سرور برای دانلود جدید کافی نیست")
 	}
 
-	tmpDir, err := os.MkdirTemp("", "mimo-dl-")
+	tmpDir, err := os.MkdirTemp(d.cfg.TempDir, "mimo-dl-")
 	if err != nil {
 		return nil, fmt.Errorf("create temp download dir: %w", err)
 	}
@@ -308,15 +308,15 @@ func (d *Downloader) Download(
 	} else if isYouTube {
 		switch quality {
 		case Quality720p:
-			formatString = "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
+			formatString = "bestvideo[height<=720][filesize<?250M]+bestaudio/bestvideo[height<=720]+bestaudio/best[height<=720]/best"
 		case Quality480p:
-			formatString = "bestvideo[height<=480]+bestaudio/best[height<=480]/best"
+			formatString = "bestvideo[height<=480][filesize<?150M]+bestaudio/bestvideo[height<=480]+bestaudio/best[height<=480]/best"
 		case Quality360p:
-			formatString = "bestvideo[height<=360]+bestaudio/best[height<=360]/best"
+			formatString = "bestvideo[height<=360][filesize<?100M]+bestaudio/bestvideo[height<=360]+bestaudio/best[height<=360]/best"
 		case QualityAudio:
 			formatString = "bestaudio/best"
 		default:
-			formatString = "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
+			formatString = "bestvideo[height<=720][filesize<?250M]+bestaudio/best[height<=720]/best"
 		}
 	} else {
 		switch quality {
@@ -343,7 +343,7 @@ func (d *Downloader) Download(
 		"--concurrent-fragments", "1",
 		"--format", formatString,
 		"--output", outTemplate,
-		"--postprocessor-args", "ffmpeg:-threads 1",
+		"--postprocessor-args", "ffmpeg:-threads 1 -movflags -faststart",
 	}
 
 	if ffDir := d.getFfmpegDir(); ffDir != "" {

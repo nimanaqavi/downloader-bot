@@ -172,7 +172,7 @@ func (d *Downloader) downloadTikTokViaTikWM(ctx context.Context, mediaURL string
 		return nil, fmt.Errorf("ssrf check failed for play url: %w", err)
 	}
 
-	tmpDir, err := os.MkdirTemp("", "mimo-tiktok-")
+	tmpDir, err := os.MkdirTemp(d.cfg.TempDir, "mimo-tiktok-")
 	if err != nil {
 		return nil, err
 	}

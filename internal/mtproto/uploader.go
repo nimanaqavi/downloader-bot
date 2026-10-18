@@ -3,6 +3,7 @@ package mtproto
 import (
 	"context"
 	"fmt"
+	"log"
 	"runtime"
 	"strconv"
 	"sync"
@@ -85,10 +86,12 @@ func (u *Uploader) ensureClient(ctx context.Context) (*telegram.Client, error) {
 	select {
 	case <-ready:
 		u.client = client
+		log.Println("[mtproto] client connected and authorized successfully")
 		return client, nil
 	case <-time.After(15 * time.Second):
 		cancel()
-		return nil, fmt.Errorf("mtproto connection timed out")
+		log.Printf("[mtproto error] connection timed out (startErr=%v)", startErr)
+		return nil, fmt.Errorf("mtproto connection timed out (startErr: %v)", startErr)
 	case <-ctx.Done():
 		cancel()
 		return nil, ctx.Err()
@@ -104,6 +107,7 @@ func (u *Uploader) Disconnect() {
 		u.cancelFn = nil
 	}
 	u.client = nil
+	log.Println("[mtproto] client disconnected")
 	runtime.GC()
 }
 
@@ -114,8 +118,10 @@ func (u *Uploader) UploadLargeFile(
 	caption string,
 	isAudio bool,
 ) (int, error) {
+	log.Printf("[mtproto] starting large file upload (chatID=%d, file=%s, isAudio=%v)", chatID, filePath, isAudio)
 	client, err := u.ensureClient(ctx)
 	if err != nil {
+		log.Printf("[mtproto error] ensureClient failed: %v", err)
 		return 0, fmt.Errorf("ensure mtproto client: %w", err)
 	}
 
@@ -123,6 +129,7 @@ func (u *Uploader) UploadLargeFile(
 	up := uploader.NewUploader(raw).WithThreads(1)
 	file, err := up.FromPath(ctx, filePath)
 	if err != nil {
+		log.Printf("[mtproto error] upload from path failed: %v", err)
 		return 0, fmt.Errorf("mtproto upload from path: %w", err)
 	}
 
@@ -133,6 +140,7 @@ func (u *Uploader) UploadLargeFile(
 	if isAudio {
 		res, err := peer.Audio(ctx, file, html.String(nil, caption))
 		if err != nil {
+			log.Printf("[mtproto error] peer.Audio failed: %v", err)
 			return 0, fmt.Errorf("send audio document: %w", err)
 		}
 		if updates, ok := res.(*tg.Updates); ok && len(updates.Updates) > 0 {
@@ -147,6 +155,7 @@ func (u *Uploader) UploadLargeFile(
 	} else {
 		res, err := peer.Video(ctx, file, html.String(nil, caption))
 		if err != nil {
+			log.Printf("[mtproto error] peer.Video failed: %v", err)
 			return 0, fmt.Errorf("send video document: %w", err)
 		}
 		if updates, ok := res.(*tg.Updates); ok && len(updates.Updates) > 0 {
@@ -160,6 +169,7 @@ func (u *Uploader) UploadLargeFile(
 		}
 	}
 
+	log.Printf("[mtproto] upload completed successfully, msgID=%d", msgID)
 	u.resetIdleTimer()
 	return msgID, nil
 }
