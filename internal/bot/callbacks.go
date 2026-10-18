@@ -194,8 +194,11 @@ func (s *BotServer) RegisterMasterCallback(dlHandler *DownloadHandler) {
 				if strings.HasPrefix(ref, "y_") && len(ref) == 13 {
 					videoID := ref[2:]
 					ytURL := fmt.Sprintf("https://www.youtube.com/watch?v=%s", videoID)
-					_ = c.Delete()
-					dlHandler.executePipeline(c, ytURL, ytURL, "YouTube", "youtube", "", "", 0, quality, 0, userLang)
+					statusMsgID := 0
+					if c.Callback().Message != nil {
+						statusMsgID = c.Callback().Message.ID
+					}
+					dlHandler.executePipeline(c, ytURL, ytURL, "YouTube", "youtube", "", "", 0, quality, statusMsgID, userLang)
 					return nil
 				}
 
@@ -220,9 +223,8 @@ func (s *BotServer) RegisterMasterCallback(dlHandler *DownloadHandler) {
 				}
 
 				statusMsgID := pending.StatusMsgID
-				if pending.IsPhotoCard {
-					_ = c.Delete()
-					statusMsgID = 0
+				if c.Callback().Message != nil {
+					statusMsgID = c.Callback().Message.ID
 				}
 
 				dlHandler.executePipeline(

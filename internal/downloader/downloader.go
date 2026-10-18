@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -99,6 +100,20 @@ func (d *Downloader) getYtDlpBin() string {
 	return "yt-dlp"
 }
 
+func (d *Downloader) getFfmpegDir() string {
+	home := os.Getenv("HOME")
+	if home != "" {
+		custom := filepath.Join(home, "bin")
+		if _, err := os.Stat(filepath.Join(custom, "ffmpeg")); err == nil {
+			return custom
+		}
+	}
+	if _, err := os.Stat("/home/telbot/bin/ffmpeg"); err == nil {
+		return "/home/telbot/bin"
+	}
+	return ""
+}
+
 func (d *Downloader) FetchMetadata(ctx context.Context, mediaURL string) (*Metadata, error) {
 	h := sha256.Sum256([]byte(mediaURL))
 	hashKey := hex.EncodeToString(h[:8])
@@ -115,6 +130,10 @@ func (d *Downloader) FetchMetadata(ctx context.Context, mediaURL string) (*Metad
 		return nil, fmt.Errorf("create temp meta dir: %w", err)
 	}
 
+	parsed := utils.ParseMediaURL(mediaURL)
+	isYouTube := parsed != nil && parsed.Platform == "youtube"
+	isInstagram := parsed != nil && parsed.Platform == "instagram"
+
 	args := []string{
 		"--force-ipv4",
 		"--no-warnings",
@@ -123,10 +142,23 @@ func (d *Downloader) FetchMetadata(ctx context.Context, mediaURL string) (*Metad
 		"--skip-download",
 		"--write-info-json",
 		"--output", filepath.Join(tmpDir, "info"),
-		"--extractor-args", "youtube:player_client=android,web",
 	}
 
-	if d.cfg.CookiesPath != "" {
+	if ffDir := d.getFfmpegDir(); ffDir != "" {
+		args = append(args, "--ffmpeg-location", ffDir)
+	}
+
+	if isYouTube {
+		args = append(args, "--extractor-args", "youtube:player_client=android,visionos")
+	}
+
+	// Cookies policy: NEVER pass cookies to YouTube (causes bot challenge/format skip)
+	// Pass cookies for Instagram and other platforms
+	if isInstagram && d.cfg.CookiesPath != "" {
+		if _, err := os.Stat(d.cfg.CookiesPath); err == nil {
+			args = append(args, "--cookies", d.cfg.CookiesPath)
+		}
+	} else if !isYouTube && d.cfg.CookiesPath != "" {
 		if _, err := os.Stat(d.cfg.CookiesPath); err == nil {
 			args = append(args, "--cookies", d.cfg.CookiesPath)
 		}
@@ -144,9 +176,24 @@ func (d *Downloader) FetchMetadata(ctx context.Context, mediaURL string) (*Metad
 	matches, _ := filepath.Glob(filepath.Join(tmpDir, "*.info.json"))
 	if len(matches) == 0 {
 		os.RemoveAll(tmpDir)
+
+		fallbackThumb := ""
+		if isYouTube {
+			if u, err := url.Parse(mediaURL); err == nil {
+				vid := u.Query().Get("v")
+				if vid == "" && strings.Contains(u.Host, "youtu.be") {
+					vid = strings.TrimPrefix(u.Path, "/")
+				}
+				if vid != "" {
+					fallbackThumb = fmt.Sprintf("https://i.ytimg.com/vi/%s/hqdefault.jpg", vid)
+				}
+			}
+		}
+
 		return &Metadata{
 			Title:        "Media",
 			Duration:     0,
+			ThumbnailURL: fallbackThumb,
 			InfoJSONPath: "",
 		}, nil
 	}
@@ -183,11 +230,31 @@ func (d *Downloader) FetchMetadata(ctx context.Context, mediaURL string) (*Metad
 	if dur, ok := raw["duration"].(float64); ok {
 		meta.Duration = dur
 	}
-	if thumb, ok := raw["thumbnail"].(string); ok {
-		meta.ThumbnailURL = thumb
-	}
 	if fs, ok := raw["filesize_approx"].(float64); ok {
 		meta.FilesizeApprox = int64(fs)
+	}
+
+	// Thumbnail resolution
+	if isYouTube {
+		if rawID, ok := raw["id"].(string); ok && len(rawID) == 11 {
+			meta.ThumbnailURL = fmt.Sprintf("https://i.ytimg.com/vi/%s/hqdefault.jpg", rawID)
+		}
+	}
+	if meta.ThumbnailURL == "" {
+		if thumb, ok := raw["thumbnail"].(string); ok {
+			meta.ThumbnailURL = thumb
+		}
+	}
+	if isYouTube && meta.ThumbnailURL == "" {
+		if u, err := url.Parse(mediaURL); err == nil {
+			vid := u.Query().Get("v")
+			if vid == "" && strings.Contains(u.Host, "youtu.be") {
+				vid = strings.TrimPrefix(u.Path, "/")
+			}
+			if vid != "" {
+				meta.ThumbnailURL = fmt.Sprintf("https://i.ytimg.com/vi/%s/hqdefault.jpg", vid)
+			}
+		}
 	}
 
 	d.metaCacheMu.Lock()
@@ -224,20 +291,46 @@ func (d *Downloader) Download(
 
 	outTemplate := filepath.Join(tmpDir, "%(id)s.%(ext)s")
 
+	parsed := utils.ParseMediaURL(mediaURL)
+	isYouTube := parsed != nil && parsed.Platform == "youtube"
+	isTikTok := parsed != nil && parsed.Platform == "tiktok"
+	isInstagram := parsed != nil && parsed.Platform == "instagram"
+
 	var formatString string
 	isAudio := quality == QualityAudio
 
-	switch quality {
-	case Quality720p:
-		formatString = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]/best"
-	case Quality480p:
-		formatString = "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480]/best"
-	case Quality360p:
-		formatString = "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=360]+bestaudio/best[height<=360]/best"
-	case QualityAudio:
-		formatString = "bestaudio/best"
-	default:
-		formatString = "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
+	if isTikTok {
+		if isAudio {
+			formatString = "bestaudio/best"
+		} else {
+			formatString = "best[ext=mp4]/best"
+		}
+	} else if isYouTube {
+		switch quality {
+		case Quality720p:
+			formatString = "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
+		case Quality480p:
+			formatString = "bestvideo[height<=480]+bestaudio/best[height<=480]/best"
+		case Quality360p:
+			formatString = "bestvideo[height<=360]+bestaudio/best[height<=360]/best"
+		case QualityAudio:
+			formatString = "bestaudio/best"
+		default:
+			formatString = "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
+		}
+	} else {
+		switch quality {
+		case Quality720p:
+			formatString = "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
+		case Quality480p:
+			formatString = "bestvideo[height<=480]+bestaudio/best[height<=480]/best"
+		case Quality360p:
+			formatString = "bestvideo[height<=360]+bestaudio/best[height<=360]/best"
+		case QualityAudio:
+			formatString = "bestaudio/best"
+		default:
+			formatString = "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
+		}
 	}
 
 	args := []string{
@@ -250,8 +343,15 @@ func (d *Downloader) Download(
 		"--concurrent-fragments", "1",
 		"--format", formatString,
 		"--output", outTemplate,
-		"--extractor-args", "youtube:player_client=android,web",
 		"--postprocessor-args", "ffmpeg:-threads 1",
+	}
+
+	if ffDir := d.getFfmpegDir(); ffDir != "" {
+		args = append(args, "--ffmpeg-location", ffDir)
+	}
+
+	if isYouTube {
+		args = append(args, "--extractor-args", "youtube:player_client=android,visionos")
 	}
 
 	if isAudio {
@@ -260,23 +360,35 @@ func (d *Downloader) Download(
 		args = append(args, "--merge-output-format", "mp4")
 	}
 
-	if d.cfg.CookiesPath != "" {
+	// Cookies policy:
+	// Do NOT pass cookies to YouTube
+	// PASS cookies for Instagram
+	if isInstagram && d.cfg.CookiesPath != "" {
+		if _, err := os.Stat(d.cfg.CookiesPath); err == nil {
+			args = append(args, "--cookies", d.cfg.CookiesPath)
+		}
+	} else if !isYouTube && d.cfg.CookiesPath != "" {
 		if _, err := os.Stat(d.cfg.CookiesPath); err == nil {
 			args = append(args, "--cookies", d.cfg.CookiesPath)
 		}
 	}
 
-	// Single-pass optimization: check if we have cached info.json
-	h := sha256.Sum256([]byte(mediaURL))
-	hashKey := hex.EncodeToString(h[:8])
+	// For YouTube, pass mediaURL directly to avoid expired format URLs in info.json
+	// For other platforms, check if cached info.json exists
+	if !isYouTube {
+		h := sha256.Sum256([]byte(mediaURL))
+		hashKey := hex.EncodeToString(h[:8])
 
-	d.metaCacheMu.RLock()
-	cachedEntry, hasCached := d.metaCacheFiles[hashKey]
-	d.metaCacheMu.RUnlock()
+		d.metaCacheMu.RLock()
+		cachedEntry, hasCached := d.metaCacheFiles[hashKey]
+		d.metaCacheMu.RUnlock()
 
-	if hasCached && cachedEntry.path != "" {
-		if _, err := os.Stat(cachedEntry.path); err == nil {
-			args = append(args, "--load-info-json", cachedEntry.path)
+		if hasCached && cachedEntry.path != "" {
+			if _, err := os.Stat(cachedEntry.path); err == nil {
+				args = append(args, "--load-info-json", cachedEntry.path)
+			} else {
+				args = append(args, mediaURL)
+			}
 		} else {
 			args = append(args, mediaURL)
 		}
@@ -305,9 +417,15 @@ func (d *Downloader) Download(
 	scanner := bufio.NewScanner(stdoutPipe)
 	lastReport := time.Now()
 	var lastPct int
+	var lastLines []string
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		if len(lastLines) > 5 {
+			lastLines = lastLines[1:]
+		}
+		lastLines = append(lastLines, line)
+
 		if onProgress != nil && strings.Contains(line, "[download]") {
 			matches := progressRegex.FindStringSubmatch(line)
 			if len(matches) > 1 {
@@ -325,7 +443,8 @@ func (d *Downloader) Download(
 
 	if err := cmd.Wait(); err != nil {
 		os.RemoveAll(tmpDir)
-		return nil, fmt.Errorf("yt-dlp download failed: %w", err)
+		errDetail := strings.Join(lastLines, " | ")
+		return nil, fmt.Errorf("yt-dlp download failed: %s (%w)", errDetail, err)
 	}
 
 	// Find the output file in tmpDir
@@ -360,7 +479,6 @@ func (d *Downloader) Download(
 		mediaType = "audio"
 	}
 
-	parsed := utils.ParseMediaURL(mediaURL)
 	platformName := "Web"
 	if parsed != nil {
 		platformName = parsed.PlatformName
@@ -369,11 +487,16 @@ func (d *Downloader) Download(
 	title := "Media"
 	author := ""
 	var duration float64
-	if hasCached {
+
+	h := sha256.Sum256([]byte(mediaURL))
+	hashKey := hex.EncodeToString(h[:8])
+	d.metaCacheMu.RLock()
+	if cachedEntry, hasCached := d.metaCacheFiles[hashKey]; hasCached {
 		title = cachedEntry.meta.Title
 		author = cachedEntry.meta.Author
 		duration = cachedEntry.meta.Duration
 	}
+	d.metaCacheMu.RUnlock()
 
 	// Adjust disk usage cache
 	utils.AdjustCachedUsedMB(chosenSize / (1024 * 1024))
