@@ -1,9 +1,11 @@
 package utils
 
 import (
+	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 )
 
 var trackingParams = map[string]bool{
@@ -16,6 +18,43 @@ var trackingParams = map[string]bool{
 	"app":      true,
 	"t":        true,
 	"tracking": true,
+}
+
+func ResolveShortLink(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	host := strings.ToLower(u.Hostname())
+	if host != "vm.tiktok.com" && host != "vt.tiktok.com" && !strings.Contains(host, "spotify.link") {
+		return rawURL
+	}
+
+	client := &http.Client{
+		Timeout: 6 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+	req, err := http.NewRequest("HEAD", rawURL, nil)
+	if err != nil {
+		return rawURL
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	resp, err := client.Do(req)
+	if err == nil && resp != nil {
+		defer resp.Body.Close()
+		if resp.Request != nil && resp.Request.URL != nil {
+			finalURL := resp.Request.URL.String()
+			if safe, _ := ValidateSafeURL(finalURL); safe {
+				return finalURL
+			}
+		}
+	}
+	return rawURL
 }
 
 func NormalizeMediaURL(rawURL string) string {
@@ -77,6 +116,8 @@ func ParseMediaURL(rawURL string) *ParsedMediaURL {
 		isAudio = true
 		clean = strings.TrimSpace(clean[4:])
 	}
+
+	clean = ResolveShortLink(clean)
 
 	u, err := url.Parse(clean)
 	if err != nil {

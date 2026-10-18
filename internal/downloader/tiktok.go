@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +25,8 @@ type tikWmResponse struct {
 		Duration float64 `json:"duration"`
 		Size     int64   `json:"size"`
 		Play     string  `json:"play"`
+		WMPlay   string  `json:"wmplay"`
+		HDPlay   string  `json:"hdplay"`
 		Cover    string  `json:"cover"`
 		Author   *struct {
 			UniqueID string `json:"unique_id"`
@@ -89,23 +92,43 @@ func (d *Downloader) DownloadTikTok(
 		tikWmCircuit.RecordFailure()
 	}
 
-	// Fallback to yt-dlp
+	// Fallback to yt-dlp (which uses format best[ext=mp4]/best without height limits)
 	return d.Download(ctx, mediaURL, QualityCompact, onProgress)
 }
 
 func (d *Downloader) downloadTikTokViaTikWM(ctx context.Context, mediaURL string) (*DownloadResult, error) {
-	apiURL := fmt.Sprintf("https://www.tikwm.com/api/?url=%s", url.QueryEscape(mediaURL))
+	apiURL := "https://www.tikwm.com/api/"
+	form := url.Values{}
+	form.Set("url", mediaURL)
+	form.Set("hd", "1")
 
-	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("Referer", "https://www.tikwm.com/")
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
+	if err != nil || resp.StatusCode != 200 {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		// Fallback to GET
+		getURL := fmt.Sprintf("https://www.tikwm.com/api/?url=%s&hd=1", url.QueryEscape(mediaURL))
+		getReq, getErr := http.NewRequestWithContext(ctx, "GET", getURL, nil)
+		if getErr != nil {
+			return nil, getErr
+		}
+		getReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+		getReq.Header.Set("Referer", "https://www.tikwm.com/")
+		resp, err = client.Do(getReq)
+		if err != nil {
+			return nil, err
+		}
 	}
 	defer resp.Body.Close()
 
@@ -118,19 +141,35 @@ func (d *Downloader) downloadTikTokViaTikWM(ctx context.Context, mediaURL string
 		return nil, err
 	}
 
-	if data.Code != 0 || data.Data == nil || data.Data.Play == "" {
+	if data.Code != 0 || data.Data == nil {
 		return nil, fmt.Errorf("tikwm returned error: %s", data.Msg)
 	}
 
-	playURL := data.Data.Play
-	if !utils.IsSafeHTTPS(playURL) {
-		return nil, fmt.Errorf("insecure or invalid play url")
+	// Pick video URL: prefer HDPlay, then Play, then WMPlay
+	var playURL string
+	if data.Data.HDPlay != "" {
+		playURL = data.Data.HDPlay
+	} else if data.Data.Play != "" {
+		playURL = data.Data.Play
+	} else if data.Data.WMPlay != "" {
+		playURL = data.Data.WMPlay
+	}
+
+	if playURL == "" {
+		return nil, fmt.Errorf("no play url in tikwm response")
+	}
+
+	// Normalize relative URLs
+	if strings.HasPrefix(playURL, "//") {
+		playURL = "https:" + playURL
+	} else if strings.HasPrefix(playURL, "/") {
+		playURL = "https://www.tikwm.com" + playURL
 	}
 
 	// SSRF check
 	safe, err := utils.ValidateSafeURL(playURL)
 	if err != nil || !safe {
-		return nil, fmt.Errorf("ssrf check failed for play url")
+		return nil, fmt.Errorf("ssrf check failed for play url: %w", err)
 	}
 
 	tmpDir, err := os.MkdirTemp("", "mimo-tiktok-")
@@ -144,7 +183,20 @@ func (d *Downloader) downloadTikTokViaTikWM(ctx context.Context, mediaURL string
 		os.RemoveAll(tmpDir)
 		return nil, err
 	}
-	dlClient := &http.Client{Timeout: 30 * time.Second}
+	dlReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+	dlReq.Header.Set("Referer", "https://www.tikwm.com/")
+
+	dlClient := &http.Client{
+		Timeout: 45 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return http.ErrUseLastResponse
+			}
+			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+			req.Header.Set("Referer", "https://www.tikwm.com/")
+			return nil
+		},
+	}
 	dlResp, err := dlClient.Do(dlReq)
 	if err != nil {
 		os.RemoveAll(tmpDir)

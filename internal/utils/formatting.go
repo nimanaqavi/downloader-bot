@@ -106,6 +106,7 @@ type QualityCardOpts struct {
 	PlatformEmojiHTML string
 	Title             string
 	DurationSeconds   float64
+	ThumbnailURL      string
 	Lang              string
 }
 
@@ -120,12 +121,18 @@ func BuildQualityCardText(opts QualityCardOpts) string {
 		durationPart = fmt.Sprintf(" │ ⏱ %s: <code>%s</code>", durationLabel, FormatDuration(opts.DurationSeconds))
 	}
 
+	var thumbPrefix string
+	if opts.ThumbnailURL != "" && (strings.HasPrefix(opts.ThumbnailURL, "http://") || strings.HasPrefix(opts.ThumbnailURL, "https://")) {
+		thumbPrefix = fmt.Sprintf("<a href=\"%s\">&#8205;</a>", EscapeHTML(opts.ThumbnailURL))
+	}
+
 	if isYt {
-		return fmt.Sprintf("<blockquote>%s YouTube%s</blockquote>", opts.PlatformEmojiHTML, durationPart)
+		return fmt.Sprintf("%s<blockquote>%s YouTube%s</blockquote>", thumbPrefix, opts.PlatformEmojiHTML, durationPart)
 	}
 
 	titleIsolated := i18n.Isolate(EscapeHTML(TruncateText(opts.Title, 80)))
-	return fmt.Sprintf("<b>%s</b>\n<blockquote>%s %s%s</blockquote>",
+	return fmt.Sprintf("%s<b>%s</b>\n<blockquote>%s %s%s</blockquote>",
+		thumbPrefix,
 		titleIsolated,
 		opts.PlatformEmojiHTML,
 		opts.PlatformName,

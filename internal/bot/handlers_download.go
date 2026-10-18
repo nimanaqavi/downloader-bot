@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -195,38 +197,17 @@ func (h *DownloadHandler) HandleLink(c tele.Context, rawURL string) {
 		PlatformEmojiHTML: h.db.GetPlatformEmojiHTML(parsed.Platform),
 		Title:             meta.Title,
 		DurationSeconds:   meta.Duration,
+		ThumbnailURL:      meta.ThumbnailURL,
 		Lang:              userLang,
 	})
 
 	keyboard := h.buildQualityKeyboard(token, parsed.Platform, urlNormalized, userLang)
-	activeMsgID := statusMsg.ID
-	isPhotoCard := false
 
-	// For YouTube: send thumbnail photo if available
-	if parsed.Platform == "youtube" && meta.ThumbnailURL != "" && strings.HasPrefix(meta.ThumbnailURL, "https://") {
-		if safe, _ := utils.ValidateSafeURL(meta.ThumbnailURL); safe {
-			photo := &tele.Photo{
-				File:    tele.FromURL(meta.ThumbnailURL),
-				Caption: cardText,
-			}
-			photoMsg, err := h.b.Send(c.Recipient(), photo, &tele.SendOptions{
-				ParseMode:   tele.ModeHTML,
-				ReplyMarkup: keyboard,
-			})
-			if err == nil && photoMsg != nil {
-				_ = h.b.Delete(statusMsg)
-				activeMsgID = photoMsg.ID
-				isPhotoCard = true
-			}
-		}
-	}
-
-	if !isPhotoCard {
-		_, _ = h.b.Edit(statusMsg, cardText, &tele.SendOptions{
-			ParseMode:   tele.ModeHTML,
-			ReplyMarkup: keyboard,
-		})
-	}
+	_, _ = h.b.Edit(statusMsg, cardText, &tele.SendOptions{
+		ParseMode:             tele.ModeHTML,
+		ReplyMarkup:           keyboard,
+		DisableWebPagePreview: false,
+	})
 
 	pending := &PendingSelection{
 		UserID:        sender.ID,
@@ -237,8 +218,8 @@ func (h *DownloadHandler) HandleLink(c tele.Context, rawURL string) {
 		Title:         meta.Title,
 		Author:        meta.Author,
 		Duration:      meta.Duration,
-		StatusMsgID:   activeMsgID,
-		IsPhotoCard:   isPhotoCard,
+		StatusMsgID:   statusMsg.ID,
+		IsPhotoCard:   false,
 		Timestamp:     time.Now().Unix(),
 		Lang:          userLang,
 	}
@@ -514,6 +495,11 @@ func (h *DownloadHandler) executePipeline(
 
 	if statusMsgID > 0 {
 		statusMsg = &tele.Message{ID: statusMsgID, Chat: c.Chat()}
+		// Immediately clear buttons and show starting progress to avoid duplicate clicks
+		_, _ = h.b.Edit(statusMsg, d.DownloadingProgress(utils.RenderProgressBar(0)), &tele.SendOptions{
+			ParseMode:             tele.ModeHTML,
+			DisableWebPagePreview: true,
+		})
 	} else {
 		var err error
 		statusMsg, err = h.b.Send(c.Recipient(), d.CheckingLink, &tele.SendOptions{ParseMode: tele.ModeHTML})
@@ -576,7 +562,10 @@ func (h *DownloadHandler) executePipeline(
 				if time.Since(lastProgressEdit) >= 1500*time.Millisecond {
 					lastProgressEdit = time.Now()
 					bar := utils.RenderProgressBar(pct)
-					_, _ = h.b.Edit(statusMsg, d.DownloadingProgress(bar), &tele.SendOptions{ParseMode: tele.ModeHTML})
+					_, _ = h.b.Edit(statusMsg, d.DownloadingProgress(bar), &tele.SendOptions{
+						ParseMode:             tele.ModeHTML,
+						DisableWebPagePreview: true,
+					})
 				}
 			})
 		}
@@ -585,20 +574,30 @@ func (h *DownloadHandler) executePipeline(
 			if time.Since(lastProgressEdit) >= 1500*time.Millisecond {
 				lastProgressEdit = time.Now()
 				bar := utils.RenderProgressBar(pct)
-				_, _ = h.b.Edit(statusMsg, d.DownloadingProgress(bar), &tele.SendOptions{ParseMode: tele.ModeHTML})
+				_, _ = h.b.Edit(statusMsg, d.DownloadingProgress(bar), &tele.SendOptions{
+					ParseMode:             tele.ModeHTML,
+					DisableWebPagePreview: true,
+				})
 			}
 		})
 	}, func(pos int) {
-		_, _ = h.b.Edit(statusMsg, d.QueueWaiting(pos), &tele.SendOptions{ParseMode: tele.ModeHTML})
+		_, _ = h.b.Edit(statusMsg, d.QueueWaiting(pos), &tele.SendOptions{
+			ParseMode:             tele.ModeHTML,
+			DisableWebPagePreview: true,
+		})
 	})
 
 	if err != nil {
-		if user != nil {
+		log.Printf("[download error] url=%s quality=%s err=%v", rawURL, quality, err)
+		if !errors.Is(err, downloader.ErrActiveJob) && user != nil {
 			_, _ = h.db.CreateDownload(user.ID, rawURL, "failed", nil, platformName)
 		}
 		errorID := utils.GenerateErrorID()
 		friendly := utils.FriendlyDownloadError(err, errorID, lang)
-		_, _ = h.b.Edit(statusMsg, friendly, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		_, _ = h.b.Edit(statusMsg, friendly, &tele.SendOptions{
+			ParseMode:             tele.ModeHTML,
+			DisableWebPagePreview: true,
+		})
 		return
 	}
 
@@ -633,8 +632,21 @@ func (h *DownloadHandler) executePipeline(
 	msgID, err := h.deliverMedia(c, result, caption, isAudio)
 
 	var downloadID int64
-	if user != nil {
-		downloadID, _ = h.db.CreateDownload(user.ID, rawURL, "success", &result.FileSizeBytes, platformName)
+	if err == nil {
+		if user != nil {
+			downloadID, _ = h.db.CreateDownload(user.ID, rawURL, "success", &result.FileSizeBytes, platformName)
+		}
+	} else {
+		log.Printf("[deliver error] url=%s err=%v", rawURL, err)
+		if user != nil {
+			_, _ = h.db.CreateDownload(user.ID, rawURL, "failed", nil, platformName)
+		}
+		errorID := utils.GenerateErrorID()
+		friendly := utils.FriendlyDownloadError(err, errorID, lang)
+		_, _ = h.b.Send(c.Recipient(), friendly, &tele.SendOptions{
+			ParseMode:             tele.ModeHTML,
+			DisableWebPagePreview: true,
+		})
 	}
 
 	if err == nil && msgID > 0 {
