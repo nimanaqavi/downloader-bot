@@ -1,10 +1,31 @@
-node_modules/
-dist/
+# Secrets & Sensitive Data
 .env
+.env.*
+cookies.txt
+*.cookies
+*.session
+
+# Database files
 data/*.db
 data/*.db-*
-coverage/
+*.db
+*.db-shm
+*.db-wal
+
+# Build artifacts & Binaries
+/mimo
+/mimo.exe
+*.exe
+mimo
+mimo.exe
+dist/
+node_modules/
+
+# Logs & Temp files
 *.log
+tmp/
+/tmp/
+coverage/
 .DS_Store
 scripts/askpass.*
 *.bat
@@ -12,7 +33,3 @@ scripts/askpass.*
 *.tar.gz
 backups/
 *.bak
-/mimo
-/mimo.exe
-
-
