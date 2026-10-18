@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
+# Watchdog: relaunch the bot only if it is not already running.
 export PATH="$HOME/bin:$HOME/.local/bin:$PATH"
 export GOMEMLIMIT=100MiB
-cd /home/hermemssss/mimo
+cd /home/telbot/mimo
+LOG_FILE="/home/telbot/mimo/bot.log"
 
-LOG_FILE="/home/hermemssss/mimo/bot.log"
-
-if [ -f "$LOG_FILE" ] && [ $(stat -f%z "$LOG_FILE" 2>/dev/null || stat -c%s "$LOG_FILE") -gt 5242880 ]; then
+if [ -f "$LOG_FILE" ] && [ $(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0) -gt 5242880 ]; then
     tail -n 100 "$LOG_FILE" > "$LOG_FILE.tmp" && mv "$LOG_FILE.tmp" "$LOG_FILE"
 fi
 
-while true; do
-    echo "$(date): Starting mimo Go binary..." >> "$LOG_FILE"
-    /home/hermemssss/mimo/mimo >> "$LOG_FILE" 2>&1
-    sleep 3
-done
+if ! pgrep -x mimo > /dev/null 2>&1; then
+    echo "$(date): bot not running, starting..." >> "$LOG_FILE"
+    setsid nohup ./mimo >> "$LOG_FILE" 2>&1 < /dev/null &
+fi
