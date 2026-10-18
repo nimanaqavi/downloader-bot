@@ -523,7 +523,7 @@ func (h *DownloadHandler) executePipeline(
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(h.cfg.DownloadTimeoutSec)*time.Second)
 	defer cancel()
 
-	lastProgressEdit := time.Now()
+	reportProgress := h.newProgressReporter(statusMsg, d)
 
 	// Special Instagram multi-item handling
 	if platformKey == "instagram" {
@@ -541,16 +541,7 @@ func (h *DownloadHandler) executePipeline(
 
 			for i := 0; i < total; i++ {
 				item := postInfo.Items[i]
-				itemRes, itemErr := h.dl.DownloadInstagramItem(ctx, item, func(pct int) {
-					if time.Since(lastProgressEdit) >= 1500*time.Millisecond {
-						lastProgressEdit = time.Now()
-						bar := utils.RenderProgressBar(pct)
-						_, _ = h.b.Edit(statusMsg, d.DownloadingProgress(bar), &tele.SendOptions{
-							ParseMode:             tele.ModeHTML,
-							DisableWebPagePreview: true,
-						})
-					}
-				})
+				itemRes, itemErr := h.dl.DownloadInstagramItem(ctx, item, reportProgress)
 				if itemErr != nil || itemRes == nil {
 					continue
 				}
@@ -578,28 +569,10 @@ func (h *DownloadHandler) executePipeline(
 	// Normal single-file pipeline via Queue
 	result, err := h.queue.Add(c.Sender().ID, func() (*downloader.DownloadResult, error) {
 		if platformKey == "tiktok" {
-			return h.dl.DownloadTikTok(ctx, rawURL, func(pct int) {
-				if time.Since(lastProgressEdit) >= 1500*time.Millisecond {
-					lastProgressEdit = time.Now()
-					bar := utils.RenderProgressBar(pct)
-					_, _ = h.b.Edit(statusMsg, d.DownloadingProgress(bar), &tele.SendOptions{
-						ParseMode:             tele.ModeHTML,
-						DisableWebPagePreview: true,
-					})
-				}
-			})
+			return h.dl.DownloadTikTok(ctx, rawURL, reportProgress)
 		}
 
-		return h.dl.Download(ctx, rawURL, quality, func(pct int) {
-			if time.Since(lastProgressEdit) >= 1500*time.Millisecond {
-				lastProgressEdit = time.Now()
-				bar := utils.RenderProgressBar(pct)
-				_, _ = h.b.Edit(statusMsg, d.DownloadingProgress(bar), &tele.SendOptions{
-					ParseMode:             tele.ModeHTML,
-					DisableWebPagePreview: true,
-				})
-			}
-		})
+		return h.dl.Download(ctx, rawURL, quality, reportProgress)
 	}, func(pos int) {
 		_, _ = h.b.Edit(statusMsg, d.QueueWaiting(pos), &tele.SendOptions{
 			ParseMode:             tele.ModeHTML,
@@ -693,6 +666,36 @@ func (h *DownloadHandler) executePipeline(
 	_ = h.b.Delete(statusMsg)
 	if result.TempDirectory != "" {
 		_ = os.RemoveAll(result.TempDirectory)
+	}
+}
+
+// newProgressReporter returns a callback that edits the status message at most
+// once per second, and also whenever the percentage has moved 5 points. A tiny
+// file finishes in well under a second, so a time-only throttle would leave the
+// bar sitting at the first percentage it happened to report.
+func (h *DownloadHandler) newProgressReporter(statusMsg *tele.Message, d *i18n.Dictionary) downloader.ProgressCallback {
+	var mu sync.Mutex
+	lastEdit := time.Now()
+	lastPct := -1
+
+	return func(pct int) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if pct <= lastPct {
+			return
+		}
+		due := time.Since(lastEdit) >= time.Second || pct-lastPct >= 5 || pct == 100
+		if !due {
+			return
+		}
+
+		lastEdit = time.Now()
+		lastPct = pct
+		_, _ = h.b.Edit(statusMsg, d.DownloadingProgress(utils.RenderProgressBar(pct)), &tele.SendOptions{
+			ParseMode:             tele.ModeHTML,
+			DisableWebPagePreview: true,
+		})
 	}
 }
 

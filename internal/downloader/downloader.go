@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"os/exec"
@@ -344,6 +345,48 @@ type ProgressCallback func(percentage int)
 
 var progressRegex = regexp.MustCompile(`\[download\]\s+(\d+(?:\.\d+)?)%`)
 
+// runYtDlp executes yt-dlp, forwarding download percentages to onProgress and
+// returning a wrapped error carrying the last few output lines on failure.
+func (d *Downloader) runYtDlp(ctx context.Context, args []string, onProgress ProgressCallback) error {
+	cmd := exec.CommandContext(ctx, d.getYtDlpBin(), args...)
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("create stdout pipe: %w", err)
+	}
+	cmd.Stderr = cmd.Stdout
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start yt-dlp: %w", err)
+	}
+
+	scanner := bufio.NewScanner(stdoutPipe)
+	scanner.Split(scanLinesOrCR)
+
+	var lastLines []string
+	for scanner.Scan() {
+		line := scanner.Text()
+		if len(lastLines) > 5 {
+			lastLines = lastLines[1:]
+		}
+		lastLines = append(lastLines, line)
+
+		if onProgress == nil || !strings.Contains(line, "[download]") {
+			continue
+		}
+		if matches := progressRegex.FindStringSubmatch(line); len(matches) > 1 {
+			if f, err := strconv.ParseFloat(matches[1], 64); err == nil {
+				onProgress(int(f))
+			}
+		}
+	}
+
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("yt-dlp download failed: %s (%w)", strings.Join(lastLines, " | "), err)
+	}
+	return nil
+}
+
 func (d *Downloader) Download(
 	ctx context.Context,
 	mediaURL string,
@@ -511,52 +554,55 @@ func (d *Downloader) Download(
 	dlCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(dlCtx, d.getYtDlpBin(), args...)
-
-	stdoutPipe, err := cmd.StdoutPipe()
-	if err != nil {
-		os.RemoveAll(tmpDir)
-		return nil, fmt.Errorf("create stdout pipe: %w", err)
-	}
-	cmd.Stderr = cmd.Stdout
-
-	if err := cmd.Start(); err != nil {
-		os.RemoveAll(tmpDir)
-		return nil, fmt.Errorf("start yt-dlp: %w", err)
-	}
-
-	scanner := bufio.NewScanner(stdoutPipe)
-	scanner.Split(scanLinesOrCR)
-	lastReport := time.Now()
-	var lastPct int
-	var lastLines []string
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		if len(lastLines) > 5 {
-			lastLines = lastLines[1:]
+	// YouTube's signed media URLs are rejected with 403 when the shared
+	// Alwaysdata IP trips its abuse heuristics. Retrying with a different
+	// player client usually succeeds, so try the alternatives before giving up.
+	clientAttempts := []string{""}
+	if isYouTube {
+		clientAttempts = []string{
+			"android,visionos",
+			"android_vr,visionos",
+			"tv_embedded,web_safari",
 		}
-		lastLines = append(lastLines, line)
+	}
 
-		if onProgress != nil && strings.Contains(line, "[download]") {
-			matches := progressRegex.FindStringSubmatch(line)
-			if len(matches) > 1 {
-				if f, err := strconv.ParseFloat(matches[1], 64); err == nil {
-					pct := int(f)
-					if (pct >= lastPct+10 || time.Since(lastReport) >= 2*time.Second) && pct > lastPct {
-						lastPct = pct
-						lastReport = time.Now()
-						onProgress(pct)
-					}
+	var lastErr error
+	for attempt, client := range clientAttempts {
+		if attempt > 0 {
+			// Clear partial output from the failed attempt.
+			entries, _ := os.ReadDir(tmpDir)
+			for _, e := range entries {
+				if !strings.HasSuffix(e.Name(), ".json") {
+					_ = os.Remove(filepath.Join(tmpDir, e.Name()))
 				}
 			}
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
 		}
+
+		runArgs := make([]string, 0, len(args)+2)
+		for _, a := range args {
+			if client != "" && a == "youtube:player_client=android,visionos" {
+				a = "youtube:player_client=" + client
+			}
+			runArgs = append(runArgs, a)
+		}
+
+		if err := d.runYtDlp(dlCtx, runArgs, onProgress); err != nil {
+			lastErr = err
+			if isYouTube && (strings.Contains(err.Error(), "403") || strings.Contains(err.Error(), "Forbidden")) {
+				log.Printf("[youtube] client %q failed with 403, retrying (attempt %d/%d)", client, attempt+1, len(clientAttempts))
+				continue
+			}
+			os.RemoveAll(tmpDir)
+			return nil, err
+		}
+		lastErr = nil
+		break
 	}
 
-	if err := cmd.Wait(); err != nil {
+	if lastErr != nil {
 		os.RemoveAll(tmpDir)
-		errDetail := strings.Join(lastLines, " | ")
-		return nil, fmt.Errorf("yt-dlp download failed: %s (%w)", errDetail, err)
+		return nil, lastErr
 	}
 
 	// Find the output file in tmpDir
