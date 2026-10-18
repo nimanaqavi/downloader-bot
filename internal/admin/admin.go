@@ -208,9 +208,12 @@ func HandleAllAdminCallbacks(
 		waiting, active := queue.Stats()
 
 		home := os.Getenv("HOME")
-		usedDiskMB := utils.GetAccountUsedMB(home)
+		usedDiskMB := utils.AccountUsedMB(home)
 		maxDiskMB := cfg.MaxDiskBudgetMB
-		diskPct := int((float64(usedDiskMB) / float64(maxDiskMB)) * 100)
+		diskPct := 0
+		if maxDiskMB > 0 {
+			diskPct = int((float64(usedDiskMB) / float64(maxDiskMB)) * 100)
+		}
 		if diskPct > 100 {
 			diskPct = 100
 		}

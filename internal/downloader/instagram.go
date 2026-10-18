@@ -10,8 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"time"
-
-	"mimo/internal/utils"
 )
 
 type InstagramMediaItem struct {
@@ -122,8 +120,6 @@ func (d *Downloader) DownloadInstagramItem(ctx context.Context, item InstagramMe
 		os.RemoveAll(tmpDir)
 		return nil, err
 	}
-
-	utils.AdjustCachedUsedMB(written / (1024 * 1024))
 
 	width, height, dur := 0, 0, item.Duration
 	if mediaType == "video" {

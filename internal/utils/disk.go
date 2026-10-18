@@ -4,73 +4,57 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"sync"
-	"time"
 )
 
-var (
-	diskMu         sync.RWMutex
-	cachedUsedMB   int64 = 150
-	lastCalculated time.Time
-	cacheTTL       = 10 * time.Minute
-)
-
-func GetAccountUsedMB(homeDir string) int64 {
-	diskMu.RLock()
-	if time.Since(lastCalculated) < cacheTTL && cachedUsedMB > 0 {
-		val := cachedUsedMB
-		diskMu.RUnlock()
-		return val
-	}
-	diskMu.RUnlock()
-
-	diskMu.Lock()
-	defer diskMu.Unlock()
-
-	// Double check
-	if time.Since(lastCalculated) < cacheTTL && cachedUsedMB > 0 {
-		return cachedUsedMB
-	}
-
+// measureUsedMB returns how much of the account's disk quota is in use, by
+// summing the home directory with du. The account quota (1 GB on Alwaysdata)
+// is not visible via statfs, which reports the underlying NFS volume instead,
+// so du is the only reliable source.
+//
+// du takes ~0.1s here, so it runs on every check rather than being cached:
+// a cached figure that goes stale after temp files are cleaned up would
+// block downloads even when the disk is empty.
+func measureUsedMB(homeDir string) (int64, bool) {
 	if homeDir == "" {
 		homeDir = "."
 	}
 
-	cmd := exec.Command("du", "-sm", homeDir)
-	out, err := cmd.Output()
-	if err == nil {
-		fields := strings.Fields(string(out))
-		if len(fields) > 0 {
-			mb, parseErr := strconv.ParseInt(fields[0], 10, 64)
-			if parseErr == nil && mb > 0 {
-				cachedUsedMB = mb
-				lastCalculated = time.Now()
-				return cachedUsedMB
-			}
-		}
+	out, err := exec.Command("du", "-sm", homeDir).Output()
+	if err != nil {
+		return 0, false
 	}
 
-	// Fallback if du is unavailable or fails
-	lastCalculated = time.Now()
-	return cachedUsedMB
-}
-
-func AdjustCachedUsedMB(deltaMB int64) {
-	diskMu.Lock()
-	defer diskMu.Unlock()
-	cachedUsedMB += deltaMB
-	if cachedUsedMB < 0 {
-		cachedUsedMB = 0
+	fields := strings.Fields(string(out))
+	if len(fields) == 0 {
+		return 0, false
 	}
+
+	mb, err := strconv.ParseInt(fields[0], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return mb, true
 }
 
+// AccountUsedMB reports quota usage in MB, or 0 when it cannot be measured.
+// For display only; use CheckDiskBudget when deciding whether to download.
+func AccountUsedMB(homeDir string) int64 {
+	mb, _ := measureUsedMB(homeDir)
+	return mb
+}
+
+// CheckDiskBudget reports whether neededBytes fits inside maxBudgetMB after
+// allowing for the safety margin. It refuses when usage cannot be measured,
+// so a du failure cannot silently let the 1 GB quota fill up.
 func CheckDiskBudget(homeDir string, neededBytes int64, maxBudgetMB int64, safetyMarginBytes int64) bool {
-	usedMB := GetAccountUsedMB(homeDir)
+	usedMB, ok := measureUsedMB(homeDir)
+	if !ok {
+		return false
+	}
+
 	usedBytes := usedMB * 1024 * 1024
 	maxBytes := maxBudgetMB * 1024 * 1024
 
-	if (usedBytes + neededBytes + safetyMarginBytes) > maxBytes {
-		return false
-	}
-	return true
+	return usedBytes+neededBytes+safetyMarginBytes <= maxBytes
 }
+

@@ -1,6 +1,8 @@
 package utils
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -60,5 +62,40 @@ func TestFormattingAndCaptions(t *testing.T) {
 	})
 	if !strings.Contains(caption, "Test Video") || !strings.Contains(caption, "@instagramdl_mahibot") {
 		t.Errorf("caption missing title or bot username: %s", caption)
+	}
+}
+
+func TestCheckDiskBudget(t *testing.T) {
+	dir := t.TempDir()
+
+	// A small tree must pass a generous budget.
+	if !CheckDiskBudget(dir, 10*1024*1024, 1000, 100*1024*1024) {
+		t.Errorf("expected small tree to pass budget")
+	}
+
+	// A budget smaller than the safety margin must always refuse,
+	// regardless of how empty the directory is.
+	if CheckDiskBudget(dir, 10*1024*1024, 100, 100*1024*1024) {
+		t.Errorf("expected refusal when margin alone exceeds budget")
+	}
+
+	// Unreadable path must not panic and must refuse.
+	if CheckDiskBudget(filepath.Join(dir, "nope"), 1, 1000, 0) {
+		t.Errorf("expected refusal for a path that cannot be measured")
+	}
+}
+
+func TestAccountUsedMB(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write ~1MB and confirm the measurement is in the right ballpark.
+	blob := make([]byte, 1024*1024)
+	if err := os.WriteFile(filepath.Join(dir, "blob.bin"), blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// du -sm rounds up, so anything from 1MB to a few MB is acceptable.
+	if got := AccountUsedMB(dir); got < 1 || got > 8 {
+		t.Errorf("expected ~1MB measured, got %d MB", got)
 	}
 }

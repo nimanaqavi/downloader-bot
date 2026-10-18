@@ -246,8 +246,6 @@ func (d *Downloader) downloadTikTokViaTikWM(ctx context.Context, mediaURL string
 		title = "TikTok"
 	}
 
-	utils.AdjustCachedUsedMB(written / (1024 * 1024))
-
 	width, height, dur, _ := d.EnsureFaststartAndProbe(videoPath)
 	if dur == 0 {
 		dur = data.Data.Duration

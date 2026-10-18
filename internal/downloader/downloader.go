@@ -350,9 +350,9 @@ func (d *Downloader) Download(
 	quality VideoQuality,
 	onProgress ProgressCallback,
 ) (*DownloadResult, error) {
-	// Disk safety check
-	home := os.Getenv("HOME")
-	if !utils.CheckDiskBudget(home, 100*1024*1024, d.cfg.MaxDiskBudgetMB, d.cfg.DiskSafetyMarginBytes) {
+	// Disk safety check against the account quota (1 GB on Alwaysdata).
+	// Measured fresh each time so cleanup of temp files is reflected at once.
+	if !utils.CheckDiskBudget(os.Getenv("HOME"), 100*1024*1024, d.cfg.MaxDiskBudgetMB, d.cfg.DiskSafetyMarginBytes) {
 		return nil, fmt.Errorf("فضای خالی سرور برای دانلود جدید کافی نیست")
 	}
 
@@ -611,7 +611,6 @@ func (d *Downloader) Download(
 	d.metaCacheMu.RUnlock()
 
 	// Adjust disk usage cache
-	utils.AdjustCachedUsedMB(chosenSize / (1024 * 1024))
 
 	var width, height int
 	if mediaType == "video" {
@@ -659,7 +658,6 @@ func (d *Downloader) EnsureFaststartAndProbe(videoPath string) (int, int, float6
 	if _, err := os.Stat(videoPath); err != nil {
 		return 0, 0, 0, err
 	}
-
 
 	ffDir := d.getFfmpegDir()
 	ffmpegBin := "ffmpeg"
