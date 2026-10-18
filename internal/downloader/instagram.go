@@ -66,7 +66,7 @@ func (d *Downloader) ExtractInstagramMedia(ctx context.Context, mediaURL string)
 	return &post, nil
 }
 
-func (d *Downloader) DownloadInstagramItem(ctx context.Context, item InstagramMediaItem) (*DownloadResult, error) {
+func (d *Downloader) DownloadInstagramItem(ctx context.Context, item InstagramMediaItem, onProgress ProgressCallback) (*DownloadResult, error) {
 	tmpDir, err := os.MkdirTemp(d.cfg.TempDir, "mimo-ig-")
 	if err != nil {
 		return nil, err
@@ -107,7 +107,17 @@ func (d *Downloader) DownloadInstagramItem(ctx context.Context, item InstagramMe
 	}
 	defer f.Close()
 
-	written, err := io.Copy(f, resp.Body)
+	bodyReader := io.Reader(resp.Body)
+	if onProgress != nil && resp.ContentLength > 0 {
+		bodyReader = &progressReader{
+			reader:     resp.Body,
+			total:      resp.ContentLength,
+			onProgress: onProgress,
+			lastPct:    -1,
+		}
+	}
+
+	written, err := io.Copy(f, bodyReader)
 	if err != nil {
 		os.RemoveAll(tmpDir)
 		return nil, err
@@ -115,13 +125,24 @@ func (d *Downloader) DownloadInstagramItem(ctx context.Context, item InstagramMe
 
 	utils.AdjustCachedUsedMB(written / (1024 * 1024))
 
+	width, height, dur := 0, 0, item.Duration
+	if mediaType == "video" {
+		w, h, d2, _ := d.EnsureFaststartAndProbe(outPath)
+		width, height = w, h
+		if d2 > 0 {
+			dur = d2
+		}
+	}
+
 	return &DownloadResult{
 		MediaPath:       outPath,
 		VideoPath:       outPath,
 		MediaType:       mediaType,
 		FileSizeBytes:   written,
 		Title:           "Instagram",
-		DurationSeconds: item.Duration,
+		DurationSeconds: dur,
+		Width:           width,
+		Height:          height,
 		PlatformName:    "Instagram",
 		Author:          "",
 		TempDirectory:   tmpDir,

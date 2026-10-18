@@ -153,7 +153,7 @@ func (u *Uploader) UploadLargeFile(
 			}
 		}
 	} else {
-		res, err := peer.Video(ctx, file, html.String(nil, caption))
+		res, err := peer.Media(ctx, message.Video(file, html.String(nil, caption)).SupportsStreaming())
 		if err != nil {
 			log.Printf("[mtproto error] peer.Video failed: %v", err)
 			return 0, fmt.Errorf("send video document: %w", err)

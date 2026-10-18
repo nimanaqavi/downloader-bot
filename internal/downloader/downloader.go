@@ -24,21 +24,37 @@ import (
 type VideoQuality string
 
 const (
-	Quality720p   VideoQuality = "720p"
-	Quality480p   VideoQuality = "480p"
-	Quality360p   VideoQuality = "360p"
+	Quality4K      VideoQuality = "4k"
+	Quality1080p   VideoQuality = "1080p"
+	Quality720p    VideoQuality = "720p"
+	Quality480p    VideoQuality = "480p"
+	Quality360p    VideoQuality = "360p"
 	QualityCompact VideoQuality = "compact"
 	QualityAudio   VideoQuality = "audio"
 )
 
+type ErrQualityNotAvailable struct {
+	Requested string
+	Available []string
+}
+
+func (e *ErrQualityNotAvailable) Error() string {
+	return fmt.Sprintf("quality %s not available (available: %s)", e.Requested, strings.Join(e.Available, ", "))
+}
+
+func (e *ErrQualityNotAvailable) GetRequestedAndAvailable() (string, []string) {
+	return e.Requested, e.Available
+}
+
 type Metadata struct {
-	Title          string
-	Duration       float64
-	Uploader       string
-	Author         string
-	ThumbnailURL   string
-	FilesizeApprox int64
-	InfoJSONPath   string
+	Title              string
+	Duration           float64
+	Uploader           string
+	Author             string
+	ThumbnailURL       string
+	FilesizeApprox     int64
+	InfoJSONPath       string
+	AvailableQualities []string
 }
 
 type DownloadResult struct {
@@ -48,6 +64,9 @@ type DownloadResult struct {
 	FileSizeBytes   int64
 	Title           string
 	DurationSeconds float64
+	Width           int
+	Height          int
+	ThumbnailPath   string
 	PlatformName    string
 	Author          string
 	TempDirectory   string
@@ -257,6 +276,59 @@ func (d *Downloader) FetchMetadata(ctx context.Context, mediaURL string) (*Metad
 		}
 	}
 
+	// Extract available video resolutions
+	var availableQualities []string
+	if formats, ok := raw["formats"].([]any); ok {
+		hasQ := make(map[string]bool)
+		for _, fAny := range formats {
+			fMap, ok := fAny.(map[string]any)
+			if !ok {
+				continue
+			}
+			vcodec, _ := fMap["vcodec"].(string)
+			if vcodec == "none" || vcodec == "" {
+				continue
+			}
+			var w, h float64
+			if wv, ok := fMap["width"].(float64); ok {
+				w = wv
+			}
+			if hv, ok := fMap["height"].(float64); ok {
+				h = hv
+			}
+			if w <= 0 && h <= 0 {
+				continue
+			}
+			dim := h
+			if w > 0 && h > 0 && w < h {
+				dim = w
+			} else if dim <= 0 {
+				dim = w
+			}
+			if dim >= 2160 {
+				hasQ["4k"] = true
+			}
+			if dim >= 1080 {
+				hasQ["1080p"] = true
+			}
+			if dim >= 720 {
+				hasQ["720p"] = true
+			}
+			if dim >= 480 {
+				hasQ["480p"] = true
+			}
+			if dim >= 360 {
+				hasQ["360p"] = true
+			}
+		}
+		for _, q := range []string{"4k", "1080p", "720p", "480p", "360p"} {
+			if hasQ[q] {
+				availableQualities = append(availableQualities, q)
+			}
+		}
+	}
+	meta.AvailableQualities = availableQualities
+
 	d.metaCacheMu.Lock()
 	d.metaCacheFiles[hashKey] = metaCacheEntry{
 		path:      realJSONPath,
@@ -299,6 +371,39 @@ func (d *Downloader) Download(
 	var formatString string
 	isAudio := quality == QualityAudio
 
+	if isYouTube && !isAudio && quality != QualityCompact {
+		h := sha256.Sum256([]byte(mediaURL))
+		hashKey := hex.EncodeToString(h[:8])
+		d.metaCacheMu.RLock()
+		cachedEntry, hasCached := d.metaCacheFiles[hashKey]
+		d.metaCacheMu.RUnlock()
+
+		var avail []string
+		if hasCached && len(cachedEntry.meta.AvailableQualities) > 0 {
+			avail = cachedEntry.meta.AvailableQualities
+		} else {
+			meta, err := d.FetchMetadata(ctx, mediaURL)
+			if err == nil && meta != nil && len(meta.AvailableQualities) > 0 {
+				avail = meta.AvailableQualities
+			}
+		}
+
+		if len(avail) > 0 {
+			reqQ := string(quality)
+			found := false
+			for _, a := range avail {
+				if a == reqQ {
+					found = true
+					break
+				}
+			}
+			if !found {
+				_ = os.RemoveAll(tmpDir)
+				return nil, &ErrQualityNotAvailable{Requested: reqQ, Available: avail}
+			}
+		}
+	}
+
 	if isTikTok {
 		if isAudio {
 			formatString = "bestaudio/best"
@@ -307,16 +412,20 @@ func (d *Downloader) Download(
 		}
 	} else if isYouTube {
 		switch quality {
+		case Quality4K:
+			formatString = "bestvideo[height=2160][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height=2160]+bestaudio/bestvideo[width=2160]+bestaudio"
+		case Quality1080p:
+			formatString = "bestvideo[height=1080][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height=1080]+bestaudio/bestvideo[width=1080]+bestaudio"
 		case Quality720p:
-			formatString = "bestvideo[height<=720][filesize<?250M]+bestaudio/bestvideo[height<=720]+bestaudio/best[height<=720]/best"
+			formatString = "bestvideo[height=720][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height=720]+bestaudio/bestvideo[width=720]+bestaudio/best[height=720]"
 		case Quality480p:
-			formatString = "bestvideo[height<=480][filesize<?150M]+bestaudio/bestvideo[height<=480]+bestaudio/best[height<=480]/best"
+			formatString = "bestvideo[height=480][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height=480]+bestaudio/bestvideo[width=480]+bestaudio/best[height=480]"
 		case Quality360p:
-			formatString = "bestvideo[height<=360][filesize<?100M]+bestaudio/bestvideo[height<=360]+bestaudio/best[height<=360]/best"
+			formatString = "bestvideo[height=360][vcodec^=avc1]+bestaudio[ext=m4a]/best[height=360]/bestvideo[height=360]+bestaudio"
 		case QualityAudio:
 			formatString = "bestaudio/best"
 		default:
-			formatString = "bestvideo[height<=720][filesize<?250M]+bestaudio/best[height<=720]/best"
+			formatString = "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
 		}
 	} else {
 		switch quality {
@@ -339,11 +448,13 @@ func (d *Downloader) Download(
 		"--no-cache-dir",
 		"--no-part",
 		"--no-js-runtimes",
+		"--newline",
+		"--progress",
 		"--buffer-size", "16K",
 		"--concurrent-fragments", "1",
 		"--format", formatString,
 		"--output", outTemplate,
-		"--postprocessor-args", "ffmpeg:-threads 1 -movflags -faststart",
+		"--postprocessor-args", "ffmpeg:-threads 1 -movflags +faststart",
 	}
 
 	if ffDir := d.getFfmpegDir(); ffDir != "" {
@@ -415,6 +526,7 @@ func (d *Downloader) Download(
 	}
 
 	scanner := bufio.NewScanner(stdoutPipe)
+	scanner.Split(scanLinesOrCR)
 	lastReport := time.Now()
 	var lastPct int
 	var lastLines []string
@@ -501,6 +613,18 @@ func (d *Downloader) Download(
 	// Adjust disk usage cache
 	utils.AdjustCachedUsedMB(chosenSize / (1024 * 1024))
 
+	var width, height int
+	if mediaType == "video" {
+		w, h, dur, _ := d.EnsureFaststartAndProbe(chosenFile)
+		if w > 0 && h > 0 {
+			width = w
+			height = h
+		}
+		if dur > 0 && duration == 0 {
+			duration = dur
+		}
+	}
+
 	return &DownloadResult{
 		MediaPath:       chosenFile,
 		VideoPath:       chosenFile,
@@ -508,8 +632,126 @@ func (d *Downloader) Download(
 		FileSizeBytes:   chosenSize,
 		Title:           title,
 		DurationSeconds: duration,
+		Width:           width,
+		Height:          height,
 		PlatformName:    platformName,
 		Author:          author,
 		TempDirectory:   tmpDir,
 	}, nil
+}
+
+func scanLinesOrCR(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	for i := 0; i < len(data); i++ {
+		if data[i] == '\n' || data[i] == '\r' {
+			return i + 1, data[:i], nil
+		}
+	}
+	if atEOF {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
+
+func (d *Downloader) EnsureFaststartAndProbe(videoPath string) (int, int, float64, error) {
+	if _, err := os.Stat(videoPath); err != nil {
+		return 0, 0, 0, err
+	}
+
+
+	ffDir := d.getFfmpegDir()
+	ffmpegBin := "ffmpeg"
+	ffprobeBin := "ffprobe"
+	if ffDir != "" {
+		if _, err := os.Stat(filepath.Join(ffDir, "ffmpeg")); err == nil {
+			ffmpegBin = filepath.Join(ffDir, "ffmpeg")
+		}
+		if _, err := os.Stat(filepath.Join(ffDir, "ffprobe")); err == nil {
+			ffprobeBin = filepath.Join(ffDir, "ffprobe")
+		}
+	}
+
+	// 1. If MP4, ensure moov atom is at the beginning (skip if already faststart)
+	if strings.HasSuffix(strings.ToLower(videoPath), ".mp4") && !hasFaststartAtom(videoPath) {
+		fastPath := videoPath + ".fast.mp4"
+		cmd := exec.Command(ffmpegBin, "-y", "-loglevel", "error", "-i", videoPath, "-c", "copy", "-movflags", "+faststart", "-threads", "1", fastPath)
+		if err := cmd.Run(); err == nil {
+			if fi, err := os.Stat(fastPath); err == nil && fi.Size() > 0 {
+				_ = os.Rename(fastPath, videoPath)
+			} else {
+				_ = os.Remove(fastPath)
+			}
+		}
+	}
+
+	// 2. Probe width, height, duration with ffprobe
+	cmdProbe := exec.Command(ffprobeBin, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,duration", "-of", "default=noprint_wrappers=1", videoPath)
+	out, err := cmdProbe.Output()
+	if err != nil {
+		return 0, 0, 0, nil
+	}
+
+	var width, height int
+	var duration float64
+
+	lines := strings.Split(string(out), "\n")
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if strings.HasPrefix(l, "width=") {
+			width, _ = strconv.Atoi(strings.TrimPrefix(l, "width="))
+		} else if strings.HasPrefix(l, "height=") {
+			height, _ = strconv.Atoi(strings.TrimPrefix(l, "height="))
+		} else if strings.HasPrefix(l, "duration=") {
+			duration, _ = strconv.ParseFloat(strings.TrimPrefix(l, "duration="), 64)
+		}
+	}
+
+	return width, height, duration, nil
+}
+
+// hasFaststartAtom reports whether the moov atom precedes mdat in the MP4 file.
+// It walks top-level box headers, so it is O(number of top-level boxes) and
+// avoids remuxing files yt-dlp already produced with faststart enabled.
+func hasFaststartAtom(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	var offset int64
+	header := make([]byte, 8)
+
+	for {
+		if _, err := f.ReadAt(header, offset); err != nil {
+			return false
+		}
+		size := int64(header[0])<<24 | int64(header[1])<<16 | int64(header[2])<<8 | int64(header[3])
+		boxType := string(header[4:8])
+
+		if boxType == "moov" {
+			return true
+		}
+		if boxType == "mdat" {
+			return false
+		}
+
+		if size == 1 {
+			// 64-bit extended size
+			ext := make([]byte, 8)
+			if _, err := f.ReadAt(ext, offset+8); err != nil {
+				return false
+			}
+			size = 0
+			for i := 0; i < 8; i++ {
+				size = size<<8 | int64(ext[i])
+			}
+		}
+		if size <= 0 {
+			return false
+		}
+		offset += size
+	}
 }

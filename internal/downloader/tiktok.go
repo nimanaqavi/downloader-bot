@@ -84,7 +84,7 @@ func (d *Downloader) DownloadTikTok(
 ) (*DownloadResult, error) {
 	// Try TikWM first if provider is tikwm_first and circuit is not open
 	if d.cfg.TikTokProvider == "tikwm_first" && !tikWmCircuit.IsOpen() {
-		res, err := d.downloadTikTokViaTikWM(ctx, mediaURL)
+		res, err := d.downloadTikTokViaTikWM(ctx, mediaURL, onProgress)
 		if err == nil && res != nil {
 			tikWmCircuit.RecordSuccess()
 			return res, nil
@@ -96,7 +96,7 @@ func (d *Downloader) DownloadTikTok(
 	return d.Download(ctx, mediaURL, QualityCompact, onProgress)
 }
 
-func (d *Downloader) downloadTikTokViaTikWM(ctx context.Context, mediaURL string) (*DownloadResult, error) {
+func (d *Downloader) downloadTikTokViaTikWM(ctx context.Context, mediaURL string, onProgress ProgressCallback) (*DownloadResult, error) {
 	apiURL := "https://www.tikwm.com/api/"
 	form := url.Values{}
 	form.Set("url", mediaURL)
@@ -216,7 +216,17 @@ func (d *Downloader) downloadTikTokViaTikWM(ctx context.Context, mediaURL string
 	}
 	defer f.Close()
 
-	written, err := io.Copy(f, dlResp.Body)
+	bodyReader := io.Reader(dlResp.Body)
+	if onProgress != nil && dlResp.ContentLength > 0 {
+		bodyReader = &progressReader{
+			reader:     dlResp.Body,
+			total:      dlResp.ContentLength,
+			onProgress: onProgress,
+			lastPct:    -1,
+		}
+	}
+
+	written, err := io.Copy(f, bodyReader)
 	if err != nil {
 		os.RemoveAll(tmpDir)
 		return nil, err
@@ -238,15 +248,48 @@ func (d *Downloader) downloadTikTokViaTikWM(ctx context.Context, mediaURL string
 
 	utils.AdjustCachedUsedMB(written / (1024 * 1024))
 
+	width, height, dur, _ := d.EnsureFaststartAndProbe(videoPath)
+	if dur == 0 {
+		dur = data.Data.Duration
+	}
+
 	return &DownloadResult{
 		MediaPath:       videoPath,
 		VideoPath:       videoPath,
 		MediaType:       "video",
 		FileSizeBytes:   written,
 		Title:           title,
-		DurationSeconds: data.Data.Duration,
+		DurationSeconds: dur,
+		Width:           width,
+		Height:          height,
 		PlatformName:    "TikTok",
 		Author:          author,
 		TempDirectory:   tmpDir,
 	}, nil
+}
+
+type progressReader struct {
+	reader     io.Reader
+	total      int64
+	read       int64
+	onProgress ProgressCallback
+	lastPct    int
+}
+
+func (pr *progressReader) Read(p []byte) (int, error) {
+	n, err := pr.reader.Read(p)
+	if n > 0 {
+		pr.read += int64(n)
+		if pr.total > 0 {
+			pct := int(float64(pr.read) * 100 / float64(pr.total))
+			if pct > 100 {
+				pct = 100
+			}
+			if pct >= pr.lastPct+5 || pct == 100 {
+				pr.lastPct = pct
+				pr.onProgress(pct)
+			}
+		}
+	}
+	return n, err
 }

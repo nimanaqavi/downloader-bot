@@ -33,6 +33,10 @@ func SanitizeLog(text string, tokenToMask string) string {
 	return s
 }
 
+type QualityUnavailableError interface {
+	GetRequestedAndAvailable() (string, []string)
+}
+
 func FriendlyDownloadError(err error, errorID string, lang string) string {
 	if errorID == "" {
 		errorID = GenerateErrorID()
@@ -44,6 +48,11 @@ func FriendlyDownloadError(err error, errorID string, lang string) string {
 
 	if err == nil {
 		return d.ErrGeneric(errorID)
+	}
+
+	if qe, ok := err.(QualityUnavailableError); ok {
+		req, avail := qe.GetRequestedAndAvailable()
+		return d.ErrQualityNotAvailable(req, avail)
 	}
 
 	msg := err.Error()

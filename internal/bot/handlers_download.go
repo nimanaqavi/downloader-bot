@@ -261,6 +261,14 @@ func (h *DownloadHandler) buildQualityKeyboard(
 			}
 		}
 
+		p4k := ""
+		if h.db.HasQualityCache(urlNormalized, "4k") {
+			p4k = "⚡ "
+		}
+		p1080 := ""
+		if h.db.HasQualityCache(urlNormalized, "1080p") {
+			p1080 = "⚡ "
+		}
 		p720 := ""
 		if h.db.HasQualityCache(urlNormalized, "720p") {
 			p720 = "⚡ "
@@ -278,12 +286,15 @@ func (h *DownloadHandler) buildQualityKeyboard(
 			pAudio = "⚡ "
 		}
 
+		btn4K := menu.Data(p4k+"4K", fmt.Sprintf("q:%s:4k", ref))
+		btn1080 := menu.Data(p1080+"1080p", fmt.Sprintf("q:%s:1080p", ref))
 		btn720 := menu.Data(p720+"720p", fmt.Sprintf("q:%s:720p", ref))
 		btn480 := menu.Data(p480+"480p", fmt.Sprintf("q:%s:480p", ref))
 		btn360 := menu.Data(p360+"360p", fmt.Sprintf("q:%s:360p", ref))
 		btnMP3 := menu.Data(pAudio+d.BtnGetMP3, fmt.Sprintf("q:%s:audio", ref))
 
 		menu.Inline(
+			menu.Row(btn4K, btn1080),
 			menu.Row(btn720, btn480),
 			menu.Row(btn360, btnMP3),
 			menu.Row(cancelBtn),
@@ -530,7 +541,16 @@ func (h *DownloadHandler) executePipeline(
 
 			for i := 0; i < total; i++ {
 				item := postInfo.Items[i]
-				itemRes, itemErr := h.dl.DownloadInstagramItem(ctx, item)
+				itemRes, itemErr := h.dl.DownloadInstagramItem(ctx, item, func(pct int) {
+					if time.Since(lastProgressEdit) >= 1500*time.Millisecond {
+						lastProgressEdit = time.Now()
+						bar := utils.RenderProgressBar(pct)
+						_, _ = h.b.Edit(statusMsg, d.DownloadingProgress(bar), &tele.SendOptions{
+							ParseMode:             tele.ModeHTML,
+							DisableWebPagePreview: true,
+						})
+					}
+				})
 				if itemErr != nil || itemRes == nil {
 					continue
 				}
@@ -717,9 +737,13 @@ func (h *DownloadHandler) deliverMedia(
 		}
 
 		video := &tele.Video{
-			File:     tele.FromDisk(result.MediaPath),
-			Caption:  caption,
-			Duration: int(result.DurationSeconds),
+			File:      tele.FromDisk(result.MediaPath),
+			Caption:   caption,
+			Duration:  int(result.DurationSeconds),
+			Width:     result.Width,
+			Height:    result.Height,
+			MIME:      "video/mp4",
+			Streaming: true,
 		}
 		msg, err := h.b.Send(c.Recipient(), video, &tele.SendOptions{ParseMode: tele.ModeHTML})
 		if err != nil {

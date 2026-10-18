@@ -2,6 +2,7 @@ package i18n
 
 import (
 	"fmt"
+	"strings"
 )
 
 type Language = string
@@ -66,6 +67,7 @@ type Dictionary struct {
 	ErrTimeout             func(errorID string) string
 	ErrPrivateMedia        func(errorID string) string
 	ErrTikTok              func(errorID string) string
+	ErrQualityNotAvailable func(req string, avail []string) string
 	ErrGeneric             func(errorID string) string
 }
 
@@ -154,6 +156,15 @@ var Translations = map[Language]*Dictionary{
 		ErrTikTok: func(errorID string) string {
 			return fmt.Sprintf("ارتباط با سرور تیک‌تاک برقرار نشد. لطفاً چند لحظه بعد مجدداً امتحان کنید.\n<code>کد پیگیری: %s</code>", errorID)
 		},
+		ErrQualityNotAvailable: func(req string, avail []string) string {
+			availList := strings.Join(avail, ", ")
+			if availList != "" {
+				availList += ", MP3"
+			} else {
+				availList = "MP3"
+			}
+			return fmt.Sprintf("⚠️ کیفیت مورد نظر ویدیو شما (<b>%s</b>) در دسترس نیست.\n✅ کیفیت‌های در دسترس برای این ویدیو:\n<code>%s</code>", req, availList)
+		},
 		ErrGeneric: func(errorID string) string {
 			return fmt.Sprintf("متأسفانه ارتباط با سرور مبدأ برقرار نشد. لطفاً لینک را بررسی کرده و چند لحظه دیگر دوباره بفرستید.\n<code>کد پیگیری: %s</code>", errorID)
 		},
@@ -241,6 +252,15 @@ var Translations = map[Language]*Dictionary{
 		},
 		ErrTikTok: func(errorID string) string {
 			return fmt.Sprintf("Failed to connect to TikTok server. Please try again shortly.\n<code>Error ID: %s</code>", errorID)
+		},
+		ErrQualityNotAvailable: func(req string, avail []string) string {
+			availList := strings.Join(avail, ", ")
+			if availList != "" {
+				availList += ", MP3"
+			} else {
+				availList = "MP3"
+			}
+			return fmt.Sprintf("⚠️ The requested quality (<b>%s</b>) is not available for this video.\n✅ Available qualities:\n<code>%s</code>", req, availList)
 		},
 		ErrGeneric: func(errorID string) string {
 			return fmt.Sprintf("Failed to fetch from source. Please check the link and try again shortly.\n<code>Error ID: %s</code>", errorID)
