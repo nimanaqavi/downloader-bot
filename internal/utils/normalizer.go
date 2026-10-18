@@ -26,27 +26,33 @@ func ResolveShortLink(rawURL string) string {
 		return rawURL
 	}
 	host := strings.ToLower(u.Hostname())
-	if host != "vm.tiktok.com" && host != "vt.tiktok.com" && !strings.Contains(host, "spotify.link") {
+	path := strings.ToLower(u.Path)
+
+	isTikTokShort := host == "vm.tiktok.com" || host == "vt.tiktok.com" ||
+		(strings.Contains(host, "tiktok.com") && strings.HasPrefix(path, "/t/"))
+	isSpotifyShort := strings.Contains(host, "spotify.link")
+
+	if !isTikTokShort && !isSpotifyShort {
 		return rawURL
 	}
 
 	client := &http.Client{
-		Timeout: 6 * time.Second,
+		Timeout: 8 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
+			if len(via) >= 6 {
 				return http.ErrUseLastResponse
 			}
 			return nil
 		},
 	}
-	req, err := http.NewRequest("HEAD", rawURL, nil)
+	req, err := http.NewRequest("GET", rawURL, nil)
 	if err != nil {
 		return rawURL
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 	resp, err := client.Do(req)
 	if err == nil && resp != nil {
-		defer resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.Request != nil && resp.Request.URL != nil {
 			finalURL := resp.Request.URL.String()
 			if safe, _ := ValidateSafeURL(finalURL); safe {

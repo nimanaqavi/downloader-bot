@@ -67,7 +67,7 @@ func (d *Downloader) ExtractInstagramMedia(ctx context.Context, mediaURL string)
 }
 
 func (d *Downloader) DownloadInstagramItem(ctx context.Context, item InstagramMediaItem) (*DownloadResult, error) {
-	tmpDir, err := os.MkdirTemp("", "mimo-ig-")
+	tmpDir, err := os.MkdirTemp(d.cfg.TempDir, "mimo-ig-")
 	if err != nil {
 		return nil, err
 	}

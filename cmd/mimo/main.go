@@ -36,6 +36,15 @@ func main() {
 		log.Fatalf("[fatal] Config load failed: %v", err)
 	}
 
+	// Ensure physical temp directory exists on disk and override system TMPDIR (critical for tmpfs RAM limits)
+	if err := os.MkdirAll(cfg.TempDir, 0755); err != nil {
+		log.Fatalf("[fatal] Failed to create TempDir %s: %v", cfg.TempDir, err)
+	}
+	_ = os.Setenv("TMPDIR", cfg.TempDir)
+	_ = os.Setenv("TEMP", cfg.TempDir)
+	_ = os.Setenv("TMP", cfg.TempDir)
+	log.Printf("[startup] Physical temp directory: %s", cfg.TempDir)
+
 	// 3. Connect SQLite Database
 	db, err := database.Connect(cfg.DatabasePath)
 	if err != nil {
@@ -59,7 +68,7 @@ func main() {
 	}
 
 	// 7. Cleanup orphaned temp directories from previous crashed runs
-	cleanupOrphanedTempDirs()
+	cleanupOrphanedTempDirs(cfg.TempDir)
 
 	// 8. Bind HTTP Webhook & Healthcheck server immediately for Alwaysdata
 	listenAddr := net.JoinHostPort(cfg.Host, cfg.Port)
@@ -184,13 +193,27 @@ func registerTelegramWebhook(token, webhookURL string) {
 	log.Printf("[webhook] Telegram setWebhook response: ok=%v description=%s", res.OK, res.Description)
 }
 
-func cleanupOrphanedTempDirs() {
-	tmp := os.TempDir()
-	matches, _ := filepath.Glob(filepath.Join(tmp, "mimo-*"))
+func cleanupOrphanedTempDirs(dirs ...string) {
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		matches, _ := filepath.Glob(filepath.Join(dir, "mimo-*"))
+		for _, m := range matches {
+			_ = os.RemoveAll(m)
+		}
+		tiktokMatches, _ := filepath.Glob(filepath.Join(dir, "tiktok-*"))
+		for _, m := range tiktokMatches {
+			_ = os.RemoveAll(m)
+		}
+	}
+	// Also clean OS tempdir
+	osTmp := os.TempDir()
+	matches, _ := filepath.Glob(filepath.Join(osTmp, "mimo-*"))
 	for _, m := range matches {
 		_ = os.RemoveAll(m)
 	}
-	tiktokMatches, _ := filepath.Glob(filepath.Join(tmp, "tiktok-*"))
+	tiktokMatches, _ := filepath.Glob(filepath.Join(osTmp, "tiktok-*"))
 	for _, m := range tiktokMatches {
 		_ = os.RemoveAll(m)
 	}
