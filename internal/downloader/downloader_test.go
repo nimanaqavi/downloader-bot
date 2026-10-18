@@ -110,3 +110,44 @@ func TestScanLinesOrCRFinalChunk(t *testing.T) {
 		t.Errorf("expected full token at EOF, got advance=%d token=%q", advance, token)
 	}
 }
+
+func TestQualitiesFromFormats(t *testing.T) {
+	formats := []any{
+		map[string]any{"vcodec": "none", "width": 48.0, "height": 27.0},      // audio/storyboard, ignored
+		map[string]any{"vcodec": "avc1", "width": 640.0, "height": 360.0},    // 360p
+		map[string]any{"vcodec": "avc1", "width": 1280.0, "height": 720.0},   // 720p
+		map[string]any{"vcodec": "avc1", "width": 1920.0, "height": 1080.0},  // 1080p
+		map[string]any{"vcodec": "vp9", "width": 3840.0, "height": 2160.0},   // 4k
+		map[string]any{"vcodec": "avc1", "width": 1080.0, "height": 1920.0},  // vertical 1080p
+		map[string]any{"vcodec": "none", "width": 0.0, "height": 0.0},        // empty
+	}
+
+	got := qualitiesFromFormats(formats)
+	want := []string{"4k", "1080p", "720p", "360p"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %v, got %v", want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("position %d: expected %s, got %s", i, want[i], got[i])
+		}
+	}
+}
+
+func TestQualitiesFromFormatsVerticalOnly(t *testing.T) {
+	// A Shorts video whose only resolutions are vertical must still report
+	// the correct tiers; the smaller side is the meaningful one.
+	formats := []any{
+		map[string]any{"vcodec": "avc1", "width": 1080.0, "height": 1920.0},
+	}
+	got := qualitiesFromFormats(formats)
+	if len(got) != 1 || got[0] != "1080p" {
+		t.Errorf("expected [1080p] for vertical 1080x1920, got %v", got)
+	}
+}
+
+func TestQualitiesFromFormatsEmpty(t *testing.T) {
+	if got := qualitiesFromFormats(nil); len(got) != 0 {
+		t.Errorf("expected empty for nil formats, got %v", got)
+	}
+}

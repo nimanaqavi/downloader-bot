@@ -278,57 +278,9 @@ func (d *Downloader) FetchMetadata(ctx context.Context, mediaURL string) (*Metad
 	}
 
 	// Extract available video resolutions
-	var availableQualities []string
 	if formats, ok := raw["formats"].([]any); ok {
-		hasQ := make(map[string]bool)
-		for _, fAny := range formats {
-			fMap, ok := fAny.(map[string]any)
-			if !ok {
-				continue
-			}
-			vcodec, _ := fMap["vcodec"].(string)
-			if vcodec == "none" || vcodec == "" {
-				continue
-			}
-			var w, h float64
-			if wv, ok := fMap["width"].(float64); ok {
-				w = wv
-			}
-			if hv, ok := fMap["height"].(float64); ok {
-				h = hv
-			}
-			if w <= 0 && h <= 0 {
-				continue
-			}
-			dim := h
-			if w > 0 && h > 0 && w < h {
-				dim = w
-			} else if dim <= 0 {
-				dim = w
-			}
-			if dim >= 2160 {
-				hasQ["4k"] = true
-			}
-			if dim >= 1080 {
-				hasQ["1080p"] = true
-			}
-			if dim >= 720 {
-				hasQ["720p"] = true
-			}
-			if dim >= 480 {
-				hasQ["480p"] = true
-			}
-			if dim >= 360 {
-				hasQ["360p"] = true
-			}
-		}
-		for _, q := range []string{"4k", "1080p", "720p", "480p", "360p"} {
-			if hasQ[q] {
-				availableQualities = append(availableQualities, q)
-			}
-		}
+		meta.AvailableQualities = qualitiesFromFormats(formats)
 	}
-	meta.AvailableQualities = availableQualities
 
 	d.metaCacheMu.Lock()
 	d.metaCacheFiles[hashKey] = metaCacheEntry{
@@ -387,6 +339,86 @@ func (d *Downloader) runYtDlp(ctx context.Context, args []string, onProgress Pro
 	return nil
 }
 
+var formatUnavailableRegex = regexp.MustCompile(`Requested format is not available`)
+
+// probeAvailableQualities asks yt-dlp which resolutions this video actually
+// offers right now. It is only called on the failure path, so the extra
+// process costs nothing in the normal case.
+func (d *Downloader) probeAvailableQualities(ctx context.Context, mediaURL, client string) []string {
+	args := []string{
+		"--force-ipv4", "--no-warnings", "--no-cache-dir", "--no-js-runtimes",
+		"--skip-download", "--dump-single-json",
+	}
+	if client != "" {
+		args = append(args, "--extractor-args", "youtube:player_client="+client)
+	}
+	args = append(args, mediaURL)
+
+	probeCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+
+	out, err := exec.CommandContext(probeCtx, d.getYtDlpBin(), args...).Output()
+	if err != nil {
+		return nil
+	}
+
+	var raw map[string]any
+	if json.Unmarshal(out, &raw) != nil {
+		return nil
+	}
+
+	formats, _ := raw["formats"].([]any)
+	return qualitiesFromFormats(formats)
+}
+
+// qualitiesFromFormats maps yt-dlp format entries to the standard quality
+// names, using the smaller side of each resolution so vertical videos
+// (e.g. 1080x1920 Shorts) report their real tier instead of being missed.
+func qualitiesFromFormats(formats []any) []string {
+	seen := make(map[string]bool)
+	for _, fAny := range formats {
+		fMap, ok := fAny.(map[string]any)
+		if !ok {
+			continue
+		}
+		vcodec, _ := fMap["vcodec"].(string)
+		if vcodec == "" || vcodec == "none" {
+			continue
+		}
+		w, _ := fMap["width"].(float64)
+		h, _ := fMap["height"].(float64)
+		if w <= 0 && h <= 0 {
+			continue
+		}
+		dim := h
+		if w > 0 && h > 0 && w < h {
+			dim = w
+		} else if dim <= 0 {
+			dim = w
+		}
+		switch {
+		case dim >= 2160:
+			seen["4k"] = true
+		case dim >= 1080:
+			seen["1080p"] = true
+		case dim >= 720:
+			seen["720p"] = true
+		case dim >= 480:
+			seen["480p"] = true
+		case dim >= 360:
+			seen["360p"] = true
+		}
+	}
+
+	var qualities []string
+	for _, q := range []string{"4k", "1080p", "720p", "480p", "360p"} {
+		if seen[q] {
+			qualities = append(qualities, q)
+		}
+	}
+	return qualities
+}
+
 func (d *Downloader) Download(
 	ctx context.Context,
 	mediaURL string,
@@ -413,39 +445,6 @@ func (d *Downloader) Download(
 
 	var formatString string
 	isAudio := quality == QualityAudio
-
-	if isYouTube && !isAudio && quality != QualityCompact {
-		h := sha256.Sum256([]byte(mediaURL))
-		hashKey := hex.EncodeToString(h[:8])
-		d.metaCacheMu.RLock()
-		cachedEntry, hasCached := d.metaCacheFiles[hashKey]
-		d.metaCacheMu.RUnlock()
-
-		var avail []string
-		if hasCached && len(cachedEntry.meta.AvailableQualities) > 0 {
-			avail = cachedEntry.meta.AvailableQualities
-		} else {
-			meta, err := d.FetchMetadata(ctx, mediaURL)
-			if err == nil && meta != nil && len(meta.AvailableQualities) > 0 {
-				avail = meta.AvailableQualities
-			}
-		}
-
-		if len(avail) > 0 {
-			reqQ := string(quality)
-			found := false
-			for _, a := range avail {
-				if a == reqQ {
-					found = true
-					break
-				}
-			}
-			if !found {
-				_ = os.RemoveAll(tmpDir)
-				return nil, &ErrQualityNotAvailable{Requested: reqQ, Available: avail}
-			}
-		}
-	}
 
 	if isTikTok {
 		if isAudio {
@@ -589,10 +588,32 @@ func (d *Downloader) Download(
 
 		if err := d.runYtDlp(dlCtx, runArgs, onProgress); err != nil {
 			lastErr = err
-			if isYouTube && (strings.Contains(err.Error(), "403") || strings.Contains(err.Error(), "Forbidden")) {
-				log.Printf("[youtube] client %q failed with 403, retrying (attempt %d/%d)", client, attempt+1, len(clientAttempts))
+
+			// "Format not available" is ambiguous: the resolution may be
+			// genuinely absent, or this client may simply be rate limited and
+			// hiding its higher formats. Try the remaining clients before
+			// concluding the quality does not exist.
+			recoverable := formatUnavailableRegex.MatchString(err.Error()) ||
+				strings.Contains(err.Error(), "403") ||
+				strings.Contains(err.Error(), "Forbidden")
+
+			if isYouTube && recoverable && attempt+1 < len(clientAttempts) {
+				log.Printf("[youtube] client %q failed (%v), trying next (attempt %d/%d)",
+					client, err, attempt+1, len(clientAttempts))
 				continue
 			}
+
+			if isYouTube && recoverable {
+				avail := d.probeAvailableQualities(ctx, mediaURL, "")
+				if len(avail) == 0 {
+					avail = d.probeAvailableQualities(ctx, mediaURL, "android_vr,visionos")
+				}
+				if len(avail) > 0 {
+					_ = os.RemoveAll(tmpDir)
+					return nil, &ErrQualityNotAvailable{Requested: string(quality), Available: avail}
+				}
+			}
+
 			os.RemoveAll(tmpDir)
 			return nil, err
 		}
