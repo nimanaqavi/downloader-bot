@@ -29,9 +29,12 @@ type InstagramPostInfo struct {
 func (d *Downloader) ExtractInstagramMedia(ctx context.Context, mediaURL string) (*InstagramPostInfo, error) {
 	scriptPath := filepath.Join("scripts", "instagramExtractor.py")
 	if _, err := os.Stat(scriptPath); err != nil {
-		// Try root or relative
-		scriptPath = "/home/hermemssss/mimo/scripts/instagramExtractor.py"
-		if _, err2 := os.Stat(scriptPath); err2 != nil {
+		homePath := filepath.Join(os.Getenv("HOME"), "mimo", "scripts", "instagramExtractor.py")
+		if _, err2 := os.Stat(homePath); err2 == nil {
+			scriptPath = homePath
+		} else if _, err3 := os.Stat("/home/telbot/mimo/scripts/instagramExtractor.py"); err3 == nil {
+			scriptPath = "/home/telbot/mimo/scripts/instagramExtractor.py"
+		} else {
 			return nil, fmt.Errorf("instagramExtractor.py not found")
 		}
 	}

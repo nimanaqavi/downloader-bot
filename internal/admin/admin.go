@@ -3,6 +3,7 @@ package admin
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -352,7 +353,11 @@ func HandleAllAdminCallbacks(
 	case data == "adm:logs":
 		_ = c.Respond()
 		logText := "فایل لاگ یافت نشد."
-		logPaths := []string{"/home/hermemssss/mimo/bot.log", "bot.log"}
+		logPaths := []string{
+			"bot.log",
+			filepath.Join(os.Getenv("HOME"), "mimo", "bot.log"),
+			"/home/telbot/mimo/bot.log",
+		}
 		for _, p := range logPaths {
 			if data, err := os.ReadFile(p); err == nil {
 				lines := strings.Split(strings.TrimSpace(string(data)), "\n")

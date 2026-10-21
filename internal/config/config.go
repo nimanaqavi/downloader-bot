@@ -30,6 +30,7 @@ type Config struct {
 	BotUsername            string
 	TikTokProvider         string
 	WebhookDomain          string
+	WebhookSecret          string
 	Port                   string
 	Host                   string
 	TempDir                string
@@ -119,6 +120,7 @@ func Load() (*Config, error) {
 	botUsername := strings.TrimPrefix(getEnvString("BOT_USERNAME", "instagramdl_mahibot"), "@")
 	tiktokProvider := getEnvString("TIKTOK_PROVIDER", "tikwm_first")
 	webhookDomain := os.Getenv("WEBHOOK_DOMAIN")
+	webhookSecret := os.Getenv("WEBHOOK_SECRET")
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -159,6 +161,7 @@ func Load() (*Config, error) {
 		BotUsername:            botUsername,
 		TikTokProvider:         tiktokProvider,
 		WebhookDomain:          webhookDomain,
+		WebhookSecret:          webhookSecret,
 		Port:                   port,
 		Host:                   host,
 		TempDir:                absTmpDir,

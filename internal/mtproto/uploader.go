@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log"
 	"runtime"
-	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gotd/td/session"
@@ -25,6 +25,8 @@ type Uploader struct {
 	client    *telegram.Client
 	cancelFn  context.CancelFunc
 	idleTimer *time.Timer
+	timerMu   sync.Mutex
+	uploading atomic.Bool
 }
 
 func New(apiID int, apiHash, botToken string) *Uploader {
@@ -35,13 +37,27 @@ func New(apiID int, apiHash, botToken string) *Uploader {
 	}
 }
 
+const idleTimeout = 60 * time.Second
+
 func (u *Uploader) resetIdleTimer() {
+	u.timerMu.Lock()
+	defer u.timerMu.Unlock()
 	if u.idleTimer != nil {
 		u.idleTimer.Stop()
 	}
-	u.idleTimer = time.AfterFunc(60*time.Second, func() {
-		u.Disconnect()
-	})
+	u.idleTimer = time.AfterFunc(idleTimeout, u.idleTick)
+}
+
+// idleTick tears down an idle client to give the RAM back, but never while an
+// upload is in flight: a 180 MB file takes minutes and cancelling the client
+// mid-transfer aborts the whole send ("engine forcibly closed: context
+// canceled"). Instead it re-arms itself and checks again later.
+func (u *Uploader) idleTick() {
+	if u.uploading.Load() {
+		u.resetIdleTimer()
+		return
+	}
+	u.Disconnect()
 }
 
 func (u *Uploader) ensureClient(ctx context.Context) (*telegram.Client, error) {
@@ -111,6 +127,16 @@ func (u *Uploader) Disconnect() {
 	runtime.GC()
 }
 
+func getInputPeer(chatID int64) tg.InputPeerClass {
+	if chatID > 0 {
+		return &tg.InputPeerUser{UserID: chatID, AccessHash: 0}
+	}
+	if chatID <= -1000000000000 {
+		return &tg.InputPeerChannel{ChannelID: -(chatID + 1000000000000), AccessHash: 0}
+	}
+	return &tg.InputPeerChat{ChatID: -chatID}
+}
+
 func (u *Uploader) UploadLargeFile(
 	ctx context.Context,
 	chatID int64,
@@ -125,6 +151,13 @@ func (u *Uploader) UploadLargeFile(
 		return 0, fmt.Errorf("ensure mtproto client: %w", err)
 	}
 
+	// Keep the idle watchdog away for the whole transfer; it is re-armed below.
+	u.uploading.Store(true)
+	defer func() {
+		u.uploading.Store(false)
+		u.resetIdleTimer()
+	}()
+
 	raw := client.API()
 	up := uploader.NewUploader(raw).WithThreads(1)
 	file, err := up.FromPath(ctx, filePath)
@@ -134,7 +167,7 @@ func (u *Uploader) UploadLargeFile(
 	}
 
 	sender := message.NewSender(raw)
-	peer := sender.Resolve(strconv.FormatInt(chatID, 10))
+	peer := sender.To(getInputPeer(chatID))
 
 	var msgID int
 	if isAudio {

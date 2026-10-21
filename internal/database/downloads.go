@@ -113,3 +113,18 @@ func (db *DB) FindDownloadURLByID(id int64) (string, string, error) {
 	}
 	return url, platform.String, nil
 }
+
+func (db *DB) FindDownloadURLByIDForUser(id int64, userID int64, isAdmin bool) (string, string, error) {
+	var url string
+	var platform sql.NullString
+	var err error
+	if isAdmin {
+		err = db.QueryRow("SELECT url, platform FROM downloads WHERE id = ?", id).Scan(&url, &platform)
+	} else {
+		err = db.QueryRow("SELECT url, platform FROM downloads WHERE id = ? AND user_id = ?", id, userID).Scan(&url, &platform)
+	}
+	if err != nil {
+		return "", "", err
+	}
+	return url, platform.String, nil
+}

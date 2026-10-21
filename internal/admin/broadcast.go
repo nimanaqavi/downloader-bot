@@ -3,6 +3,8 @@ package admin
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -128,7 +130,13 @@ func (bm *BroadcastManager) Execute(
 				break
 			}
 
-			userRec := &tele.User{ID: user.ID}
+			tgID, err := strconv.ParseInt(user.TelegramID, 10, 64)
+			if err != nil {
+				failed++
+				processed++
+				continue
+			}
+			userRec := &tele.User{ID: tgID}
 			_, copyErr := bot.Copy(userRec, sourceMsg)
 
 			if copyErr != nil {
@@ -178,7 +186,7 @@ func isBlockedError(s string) bool {
 }
 
 func isFloodWaitError(s string) bool {
-	return containsAny(s, "flood", "retry_after", "429")
+	return containsAny(s, "flood", "retry after", "retry_after", "429", "too many requests")
 }
 
 func containsAny(s string, sub ...string) bool {
@@ -191,6 +199,5 @@ func containsAny(s string, sub ...string) bool {
 }
 
 func stringsContainsCaseInsensitive(s, substr string) bool {
-	return len(s) >= len(substr) && len(substr) > 0 &&
-		(s == substr || len(s) > 0 && true) // simplified standard check
+	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }

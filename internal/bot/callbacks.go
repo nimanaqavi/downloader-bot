@@ -253,7 +253,13 @@ func (s *BotServer) RegisterMasterCallback(dlHandler *DownloadHandler) {
 				return nil
 			}
 
-			rawURL, platform, err := s.DB.FindDownloadURLByID(dlID)
+			user, _ := s.DB.GetOrCreateUser(sender.ID, sender.Username)
+			if user == nil {
+				return c.Send(d.ErrRecordNotFound, &tele.SendOptions{ParseMode: tele.ModeHTML})
+			}
+			isAdmin := s.Config.AdminUserIDs[sender.ID]
+
+			rawURL, platform, err := s.DB.FindDownloadURLByIDForUser(dlID, user.ID, isAdmin)
 			if err != nil || rawURL == "" {
 				return c.Send(d.ErrRecordNotFound, &tele.SendOptions{ParseMode: tele.ModeHTML})
 			}

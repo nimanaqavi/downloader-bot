@@ -85,6 +85,14 @@ func main() {
 		}
 
 		if r.Method == http.MethodPost {
+			// Telegram echoes WEBHOOK_SECRET in this header. Without the check,
+			// anything that can reach the port could inject a forged update and
+			// impersonate an admin by spoofing sender.id.
+			if cfg.WebhookSecret != "" && r.Header.Get("X-Telegram-Bot-Api-Secret-Token") != cfg.WebhookSecret {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+
 			var update tele.Update
 			if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
 				w.WriteHeader(http.StatusBadRequest)
@@ -131,7 +139,7 @@ func main() {
 	// 9. Register Webhook with Telegram API, or fall back to long polling
 	if cfg.WebhookDomain != "" {
 		webhookURL := fmt.Sprintf("https://%s/", cfg.WebhookDomain)
-		go registerTelegramWebhook(cfg.BotToken, webhookURL)
+		go registerTelegramWebhook(cfg.BotToken, webhookURL, cfg.WebhookSecret)
 		log.Printf("[startup] Webhook mode enabled: %s", webhookURL)
 	} else {
 		// No public webhook domain configured (e.g. the domain serves a
@@ -170,12 +178,15 @@ func main() {
 	os.Exit(0)
 }
 
-func registerTelegramWebhook(token, webhookURL string) {
+func registerTelegramWebhook(token, webhookURL, secret string) {
 	// Register allowed_updates=["message","callback_query"]
 	apiURL := fmt.Sprintf(
 		"https://api.telegram.org/bot%s/setWebhook?url=%s&allowed_updates=%%5B%%22message%%22,%%22callback_query%%22%%5D&drop_pending_updates=false",
 		token, webhookURL,
 	)
+	if secret != "" {
+		apiURL += "&secret_token=" + secret
+	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(apiURL)

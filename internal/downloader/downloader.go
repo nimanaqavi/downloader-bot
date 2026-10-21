@@ -169,7 +169,7 @@ func (d *Downloader) FetchMetadata(ctx context.Context, mediaURL string) (*Metad
 	}
 
 	if isYouTube {
-		args = append(args, "--extractor-args", "youtube:player_client=android,visionos")
+		args = append(args, "--extractor-args", "youtube:player_client=visionos")
 	}
 
 	// Cookies policy: NEVER pass cookies to YouTube (causes bot challenge/format skip)
@@ -194,6 +194,18 @@ func (d *Downloader) FetchMetadata(ctx context.Context, mediaURL string) (*Metad
 
 	// Find the created .info.json
 	matches, _ := filepath.Glob(filepath.Join(tmpDir, "*.info.json"))
+	if len(matches) == 0 && isYouTube {
+		// Fallback: retry metadata extraction with android client
+		retryArgs := make([]string, len(args))
+		copy(retryArgs, args)
+		for i, a := range retryArgs {
+			if a == "youtube:player_client=visionos" {
+				retryArgs[i] = "youtube:player_client=android"
+			}
+		}
+		_ = exec.CommandContext(fetchCtx, d.getYtDlpBin(), retryArgs...).Run()
+		matches, _ = filepath.Glob(filepath.Join(tmpDir, "*.info.json"))
+	}
 	if len(matches) == 0 {
 		os.RemoveAll(tmpDir)
 
@@ -455,9 +467,9 @@ func (d *Downloader) Download(
 	} else if isYouTube {
 		switch quality {
 		case Quality4K:
-			formatString = "bestvideo[height=2160][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height=2160]+bestaudio/bestvideo[width=2160]+bestaudio"
+			formatString = "bestvideo[height=2160][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height=2160][vcodec^=vp9]+bestaudio/bestvideo[height=2160]+bestaudio/bestvideo[width=2160]+bestaudio"
 		case Quality1080p:
-			formatString = "bestvideo[height=1080][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height=1080]+bestaudio/bestvideo[width=1080]+bestaudio"
+			formatString = "bestvideo[height=1080][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height=1080][vcodec^=vp9]+bestaudio/bestvideo[height=1080]+bestaudio/bestvideo[width=1080]+bestaudio"
 		case Quality720p:
 			formatString = "bestvideo[height=720][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height=720]+bestaudio/bestvideo[width=720]+bestaudio/best[height=720]"
 		case Quality480p:
@@ -494,6 +506,8 @@ func (d *Downloader) Download(
 		"--progress",
 		"--buffer-size", "16K",
 		"--concurrent-fragments", "1",
+		"--retries", "3",
+		"--fragment-retries", "3",
 		"--format", formatString,
 		"--output", outTemplate,
 		"--postprocessor-args", "ffmpeg:-threads 1 -movflags +faststart",
@@ -501,10 +515,6 @@ func (d *Downloader) Download(
 
 	if ffDir := d.getFfmpegDir(); ffDir != "" {
 		args = append(args, "--ffmpeg-location", ffDir)
-	}
-
-	if isYouTube {
-		args = append(args, "--extractor-args", "youtube:player_client=android,visionos")
 	}
 
 	if isAudio {
@@ -553,61 +563,59 @@ func (d *Downloader) Download(
 	dlCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// YouTube's signed media URLs are rejected with 403 when the shared
-	// Alwaysdata IP trips its abuse heuristics. Retrying with a different
-	// player client usually succeeds, so try the alternatives before giving up.
+	// YouTube's signed media URLs are rejected with 403 or bot-checked when the shared
+	// Alwaysdata IP trips its heuristics. Retrying across proven clients resolves the issue.
 	clientAttempts := []string{""}
 	if isYouTube {
 		clientAttempts = []string{
+			"visionos",
 			"android,visionos",
-			"android_vr,visionos",
-			"tv_embedded,web_safari",
+			"tv_embedded",
 		}
 	}
 
 	var lastErr error
 	for attempt, client := range clientAttempts {
 		if attempt > 0 {
-			// Clear partial output from the failed attempt.
+			// Clear all partial files from previous attempt
 			entries, _ := os.ReadDir(tmpDir)
 			for _, e := range entries {
-				if !strings.HasSuffix(e.Name(), ".json") {
-					_ = os.Remove(filepath.Join(tmpDir, e.Name()))
-				}
+				_ = os.Remove(filepath.Join(tmpDir, e.Name()))
 			}
-			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+			time.Sleep(time.Duration(attempt) * time.Second)
 		}
 
 		runArgs := make([]string, 0, len(args)+2)
-		for _, a := range args {
-			if client != "" && a == "youtube:player_client=android,visionos" {
-				a = "youtube:player_client=" + client
-			}
-			runArgs = append(runArgs, a)
+		runArgs = append(runArgs, args...)
+		if isYouTube && client != "" {
+			runArgs = append(runArgs, "--extractor-args", "youtube:player_client="+client)
 		}
 
-		if err := d.runYtDlp(dlCtx, runArgs, onProgress); err != nil {
+		// No per-attempt deadline: a legit 1080p/4K transfer here runs past 90 s and
+		// killing it mid-download would burn the bandwidth and fail every retry.
+		// dlCtx (DownloadTimeoutSec) already bounds the whole sequence.
+		err := d.runYtDlp(dlCtx, runArgs, onProgress)
+
+		if err != nil {
 			lastErr = err
 
-			// "Format not available" is ambiguous: the resolution may be
-			// genuinely absent, or this client may simply be rate limited and
-			// hiding its higher formats. Try the remaining clients before
-			// concluding the quality does not exist.
-			recoverable := formatUnavailableRegex.MatchString(err.Error()) ||
-				strings.Contains(err.Error(), "403") ||
-				strings.Contains(err.Error(), "Forbidden")
+			isFormatUnavailable := formatUnavailableRegex.MatchString(err.Error())
+			isBlockedOr403 := strings.Contains(err.Error(), "403") ||
+				strings.Contains(err.Error(), "Forbidden") ||
+				strings.Contains(err.Error(), "Sign in to confirm you") ||
+				strings.Contains(err.Error(), "Too Many Requests") ||
+				strings.Contains(err.Error(), "The page needs to be reloaded")
 
-			if isYouTube && recoverable && attempt+1 < len(clientAttempts) {
-				log.Printf("[youtube] client %q failed (%v), trying next (attempt %d/%d)",
+			if isYouTube && (isFormatUnavailable || isBlockedOr403) && attempt+1 < len(clientAttempts) {
+				log.Printf("[youtube] client %q failed (%v), trying next client (attempt %d/%d)",
 					client, err, attempt+1, len(clientAttempts))
 				continue
 			}
 
-			if isYouTube && recoverable {
-				avail := d.probeAvailableQualities(ctx, mediaURL, "")
-				if len(avail) == 0 {
-					avail = d.probeAvailableQualities(ctx, mediaURL, "android_vr,visionos")
-				}
+			// Only return ErrQualityNotAvailable when the format is genuinely unavailable
+			// AND not due to a block/403/bot-check.
+			if isYouTube && isFormatUnavailable && !isBlockedOr403 {
+				avail := d.probeAvailableQualities(ctx, mediaURL, "visionos")
 				if len(avail) > 0 {
 					_ = os.RemoveAll(tmpDir)
 					return nil, &ErrQualityNotAvailable{Requested: string(quality), Available: avail}
