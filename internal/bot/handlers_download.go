@@ -383,8 +383,6 @@ func (h *DownloadHandler) handleSpotify(
 
 	result, err := h.queue.Add(c.Sender().ID, func() (*downloader.DownloadResult, error) {
 		return h.dl.ResolveAndDownloadSpotify(ctx, media.URL)
-	}, func(pos int) {
-		_, _ = h.b.Edit(statusMsg, d.QueueWaiting(pos), &tele.SendOptions{ParseMode: tele.ModeHTML})
 	})
 
 	if err != nil {
@@ -427,7 +425,7 @@ func (h *DownloadHandler) handleSpotify(
 	})
 
 	h.sendPlatformStickerIfConfigured(c, "spotify")
-	msgID, err := h.deliverMedia(c, result, caption, true)
+	msgID, err := h.deliverMedia(c, result, caption, true, statusMsg, d)
 
 	if user != nil {
 		_, _ = h.db.CreateDownload(user.ID, media.URL, "success", &result.FileSizeBytes, "Spotify")
@@ -507,7 +505,7 @@ func (h *DownloadHandler) executePipeline(
 	if statusMsgID > 0 {
 		statusMsg = &tele.Message{ID: statusMsgID, Chat: c.Chat()}
 		// Immediately clear buttons and show starting progress to avoid duplicate clicks
-		_, _ = h.b.Edit(statusMsg, d.DownloadingProgress(utils.RenderProgressBar(0)), &tele.SendOptions{
+		_, _ = h.b.Edit(statusMsg, d.CheckingLink, &tele.SendOptions{
 			ParseMode:             tele.ModeHTML,
 			DisableWebPagePreview: true,
 		})
@@ -548,7 +546,7 @@ func (h *DownloadHandler) executePipeline(
 
 				totalBytes += itemRes.FileSizeBytes
 				caption := fmt.Sprintf("📸 %s\n🤖 @%s", d.CarouselItemTitle(i+1, total), h.cfg.BotUsername)
-				_, _ = h.deliverMedia(c, itemRes, caption, false)
+				_, _ = h.deliverMedia(c, itemRes, caption, false, statusMsg, d)
 
 				if itemRes.TempDirectory != "" {
 					_ = os.RemoveAll(itemRes.TempDirectory)
@@ -573,11 +571,6 @@ func (h *DownloadHandler) executePipeline(
 		}
 
 		return h.dl.Download(ctx, rawURL, quality, reportProgress)
-	}, func(pos int) {
-		_, _ = h.b.Edit(statusMsg, d.QueueWaiting(pos), &tele.SendOptions{
-			ParseMode:             tele.ModeHTML,
-			DisableWebPagePreview: true,
-		})
 	})
 
 	if err != nil {
@@ -622,7 +615,7 @@ func (h *DownloadHandler) executePipeline(
 	})
 
 	h.sendPlatformStickerIfConfigured(c, platformKey)
-	msgID, err := h.deliverMedia(c, result, caption, isAudio)
+	msgID, err := h.deliverMedia(c, result, caption, isAudio, statusMsg, d)
 
 	var downloadID int64
 	if err == nil {
@@ -704,6 +697,8 @@ func (h *DownloadHandler) deliverMedia(
 	result *downloader.DownloadResult,
 	caption string,
 	isAudio bool,
+	statusMsg *tele.Message,
+	d *i18n.Dictionary,
 ) (int, error) {
 	const telegrafMediaLimitBytes = 45 * 1024 * 1024
 	const telegrafPhotoLimitBytes = 10 * 1024 * 1024
@@ -759,7 +754,26 @@ func (h *DownloadHandler) deliverMedia(
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	msgID, err := h.uploader.UploadLargeFile(ctx, c.Chat().ID, result.MediaPath, caption, isAudio)
+	// Upload progress: same 1s / 5-point throttle as the download bar.
+	var mu sync.Mutex
+	lastEdit, lastPct := time.Now(), -1
+	onUpload := func(pct int) {
+		mu.Lock()
+		defer mu.Unlock()
+		if pct <= lastPct {
+			return
+		}
+		if pct < 100 && pct-lastPct < 5 && time.Since(lastEdit) < time.Second {
+			return
+		}
+		lastEdit, lastPct = time.Now(), pct
+		_, _ = h.b.Edit(statusMsg, d.UploadingProgress(utils.RenderProgressBar(pct)), &tele.SendOptions{
+			ParseMode:             tele.ModeHTML,
+			DisableWebPagePreview: true,
+		})
+	}
+
+	msgID, err := h.uploader.UploadLargeFile(ctx, c.Chat().ID, result.MediaPath, caption, isAudio, onUpload)
 	return msgID, err
 }
 

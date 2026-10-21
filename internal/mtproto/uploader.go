@@ -3,7 +3,10 @@ package mtproto
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -137,12 +140,30 @@ func getInputPeer(chatID int64) tg.InputPeerClass {
 	return &tg.InputPeerChat{ChatID: -chatID}
 }
 
+// progressReader reports cumulative upload percentage to cb on every read.
+type progressReader struct {
+	r     io.Reader
+	total int64
+	read  int64
+	cb    func(int)
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	p.read += int64(n)
+	if p.cb != nil && p.total > 0 {
+		p.cb(int(p.read * 100 / p.total))
+	}
+	return n, err
+}
+
 func (u *Uploader) UploadLargeFile(
 	ctx context.Context,
 	chatID int64,
 	filePath string,
 	caption string,
 	isAudio bool,
+	onProgress func(int),
 ) (int, error) {
 	log.Printf("[mtproto] starting large file upload (chatID=%d, file=%s, isAudio=%v)", chatID, filePath, isAudio)
 	client, err := u.ensureClient(ctx)
@@ -159,11 +180,26 @@ func (u *Uploader) UploadLargeFile(
 	}()
 
 	raw := client.API()
-	up := uploader.NewUploader(raw).WithThreads(1)
-	file, err := up.FromPath(ctx, filePath)
+	// 8 parallel part uploads; the single-threaded default capped us near
+	// 600 KB/s. 8 x 512 KB in flight costs ~4 MB of RAM.
+	up := uploader.NewUploader(raw).WithThreads(8)
+
+	f, err := os.Open(filePath)
 	if err != nil {
-		log.Printf("[mtproto error] upload from path failed: %v", err)
-		return 0, fmt.Errorf("mtproto upload from path: %w", err)
+		log.Printf("[mtproto error] open media failed: %v", err)
+		return 0, fmt.Errorf("open media: %w", err)
+	}
+	defer f.Close()
+
+	st, err := f.Stat()
+	if err != nil {
+		return 0, fmt.Errorf("stat media: %w", err)
+	}
+
+	file, err := up.FromReader(ctx, filepath.Base(filePath), &progressReader{r: f, total: st.Size(), cb: onProgress})
+	if err != nil {
+		log.Printf("[mtproto error] upload failed: %v", err)
+		return 0, fmt.Errorf("mtproto upload: %w", err)
 	}
 
 	sender := message.NewSender(raw)

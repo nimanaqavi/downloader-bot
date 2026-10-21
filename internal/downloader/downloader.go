@@ -504,13 +504,13 @@ func (d *Downloader) Download(
 		"--no-js-runtimes",
 		"--newline",
 		"--progress",
-		"--buffer-size", "16K",
-		"--concurrent-fragments", "1",
+		"--buffer-size", "1M",
+		"--concurrent-fragments", "8",
 		"--retries", "3",
 		"--fragment-retries", "3",
 		"--format", formatString,
 		"--output", outTemplate,
-		"--postprocessor-args", "ffmpeg:-threads 1 -movflags +faststart",
+		"--postprocessor-args", "ffmpeg:-threads 2 -movflags +faststart",
 	}
 
 	if ffDir := d.getFfmpegDir(); ffDir != "" {

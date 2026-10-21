@@ -55,7 +55,7 @@ func main() {
 
 	// 4. Initialize Downloader Engine & Queue
 	dl := downloader.New(cfg)
-	queue := downloader.NewQueue()
+	queue := downloader.NewQueue(3)
 
 	// 5. Initialize Lazy MTProto Uploader
 	mtprotoUploader := mtproto.New(cfg.TelegramAPIID, cfg.TelegramAPIHash, cfg.BotToken)
