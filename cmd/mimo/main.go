@@ -167,6 +167,16 @@ func main() {
 	sig := <-sigChan
 	log.Printf("[shutdown] Received signal %v, shutting down gracefully...", sig)
 
+	// Hard deadline: Alwaysdata's supervisor sends SIGTERM and waits. If a
+	// subsystem blocks (Bot.Stop waiting on its loop) we must still exit, or
+	// the site stays half-dead and never respawns.
+	time.AfterFunc(10*time.Second, func() { os.Exit(0) })
+
+	// Hard deadline: Alwaysdata's supervisor sends SIGTERM and waits. If a
+	// subsystem blocks (Bot.Stop waiting on its loop) we must still exit, or
+	// the site stays half-dead and never respawns.
+	time.AfterFunc(10*time.Second, func() { os.Exit(0) })
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = httpServer.Shutdown(ctx)
