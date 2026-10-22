@@ -33,3 +33,8 @@ scripts/askpass.*
 *.tar.gz
 backups/
 *.bak
+
+# Python bytecode (instagram extractor)
+__pycache__/
+*.pyc
+
