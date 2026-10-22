@@ -13,6 +13,39 @@ try:
 except ImportError:
     pass
 
+def embed_photos(url):
+    """Photo-only posts carry no video, so yt-dlp refuses to download them.
+    The public embed page still lists the CDN image URLs and needs no cookies."""
+    import re
+    import urllib.request
+
+    m = re.search(r'/(?:p|reel|tv)/([A-Za-z0-9_-]+)', url)
+    if not m:
+        return []
+    shortcode = m.group(1)
+    req = urllib.request.Request(
+        'https://www.instagram.com/p/%s/embed/captioned/' % shortcode,
+        headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'},
+    )
+    try:
+        page = urllib.request.urlopen(req, timeout=20).read().decode('utf-8', 'ignore')
+    except Exception:
+        return []
+
+    items, seen = [], set()
+    pattern = "https://[^\"']+?\\.jpg[^\"']*"
+    for u in re.findall(pattern, page):
+        u = u.replace('&amp;', '&').strip()
+        if 's100x100' in u or '/v/t51.2885-19/' in u:
+            continue  # profile avatar
+        key = u.split('?')[0]
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append({'type': 'photo', 'url': u, 'id': shortcode})
+    return items
+
+
 def extract(url, cookies_path=None):
     opts = {
         'skip_download': True,
@@ -28,6 +61,10 @@ def extract(url, cookies_path=None):
         ydl = yt_dlp.YoutubeDL(opts)
         info = ydl.extract_info(url, download=False, process=False)
     except Exception as e:
+        if 'no video in this post' in str(e).lower():
+            photos = embed_photos(url)
+            if photos:
+                return {'title': 'Instagram', 'channel': '', 'items': photos}
         return {'error': str(e)}
 
     items = []

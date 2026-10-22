@@ -85,6 +85,13 @@ func FriendlyDownloadError(err error, errorID string, lang string) string {
 		return d.ErrSpotifyDRM
 	}
 
+	if strings.Contains(lower, "no video in this post") {
+		if lang == "en" {
+			return fmt.Sprintf("⚠️ This post contains no video or image to download.\n<code>Error ID: %s</code>", errorID)
+		}
+		return fmt.Sprintf("⚠️ این پست ویدیو یا عکسی برای دانلود ندارد.\n<code>کد پیگیری: %s</code>", errorID)
+	}
+
 	if strings.Contains(lower, "login required") || strings.Contains(lower, "checkpoint") ||
 		strings.Contains(lower, "following this account") || strings.Contains(lower, "private account") {
 		return d.ErrInstagramPrivate(errorID)

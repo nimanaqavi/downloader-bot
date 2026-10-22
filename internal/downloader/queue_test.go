@@ -7,75 +7,50 @@ import (
 	"time"
 )
 
-// Three jobs run at once, a fourth waits for a free slot, and nothing about the
-// wait is surfaced to the caller (the bot keeps showing its normal status).
-func TestQueueCapsConcurrency(t *testing.T) {
-	const slots = 3
-	q := NewQueue(slots)
-
-	var running, peak int32
+// Three jobs run at once, a fourth waits for a free slot, and a second
+// submission from a user who is already active is rejected.
+func TestQueueSlotsAndDedupe(t *testing.T) {
+	q := NewQueue(3)
 	release := make(chan struct{})
-	started := make(chan struct{}, 8)
+	var started atomic.Int32
 	var wg sync.WaitGroup
 
-	for i := int64(1); i <= slots+1; i++ {
-		wg.Add(1)
-		go func(id int64) {
+	var mu sync.Mutex
+	startedUsers := map[int64]bool{}
+
+	wg.Add(4)
+	for i := int64(1); i <= 4; i++ {
+		uid := i
+		go func() {
 			defer wg.Done()
-			_, _ = q.Add(id, func() (*DownloadResult, error) {
-				n := atomic.AddInt32(&running, 1)
-				for {
-					p := atomic.LoadInt32(&peak)
-					if n <= p || atomic.CompareAndSwapInt32(&peak, p, n) {
-						break
-					}
-				}
-				started <- struct{}{}
+			_, _ = q.Add(uid, func() (*DownloadResult, error) {
+				mu.Lock()
+				startedUsers[uid] = true
+				mu.Unlock()
+				started.Add(1)
 				<-release
-				atomic.AddInt32(&running, -1)
 				return &DownloadResult{}, nil
 			})
-		}(i)
+		}()
+		time.Sleep(20 * time.Millisecond) // keep submission order
 	}
 
-	for i := 0; i < slots; i++ {
-		select {
-		case <-started:
-		case <-time.After(2 * time.Second):
-			t.Fatalf("only %d of %d jobs started", i, slots)
-		}
+	time.Sleep(300 * time.Millisecond)
+	if got := started.Load(); got != 3 {
+		t.Fatalf("expected 3 concurrent jobs, got %d", got)
 	}
 
-	select {
-	case <-started:
-		t.Fatal("a 4th job started while all slots were busy")
-	case <-time.After(200 * time.Millisecond):
+	if _, err := q.Add(1, func() (*DownloadResult, error) { return &DownloadResult{}, nil }); err != ErrActiveJob {
+		t.Fatalf("expected ErrActiveJob for an already active user, got %v", err)
 	}
 
 	close(release)
 	wg.Wait()
 
-	if got := atomic.LoadInt32(&peak); got != slots {
-		t.Fatalf("peak concurrency = %d, want %d", got, slots)
+	if got := started.Load(); got != 4 {
+		t.Fatalf("expected the queued job to run after a slot freed, got %d", got)
 	}
 	if w, a := q.Stats(); w != 0 || a != 0 {
-		t.Fatalf("stats after drain = (%d,%d), want (0,0)", w, a)
+		t.Fatalf("expected empty queue, got waiting=%d active=%d", w, a)
 	}
-}
-
-func TestQueueRejectsSecondJobForSameUser(t *testing.T) {
-	q := NewQueue(1)
-	release := make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_, _ = q.Add(7, func() (*DownloadResult, error) { <-release; return &DownloadResult{}, nil })
-	}()
-	time.Sleep(100 * time.Millisecond)
-
-	if _, err := q.Add(7, func() (*DownloadResult, error) { return &DownloadResult{}, nil }); err != ErrActiveJob {
-		t.Fatalf("second job for same user: err = %v, want ErrActiveJob", err)
-	}
-	close(release)
-	<-done
 }

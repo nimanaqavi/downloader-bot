@@ -526,7 +526,7 @@ func (h *DownloadHandler) executePipeline(
 	// Special Instagram multi-item handling
 	if platformKey == "instagram" {
 		postInfo, err := h.dl.ExtractInstagramMedia(ctx, rawURL)
-		if err == nil && postInfo != nil && len(postInfo.Items) > 1 {
+		if err == nil && postInfo != nil && len(postInfo.Items) >= 1 {
 			// Multi-slide Carousel
 			total := len(postInfo.Items)
 			if total > 10 {
@@ -546,6 +546,9 @@ func (h *DownloadHandler) executePipeline(
 
 				totalBytes += itemRes.FileSizeBytes
 				caption := fmt.Sprintf("📸 %s\n🤖 @%s", d.CarouselItemTitle(i+1, total), h.cfg.BotUsername)
+				if total == 1 && postInfo.Title != "" && postInfo.Title != "Instagram" {
+					caption = fmt.Sprintf("📸 %s\n🤖 @%s", postInfo.Title, h.cfg.BotUsername)
+				}
 				_, _ = h.deliverMedia(c, itemRes, caption, false, statusMsg, d)
 
 				if itemRes.TempDirectory != "" {
@@ -754,19 +757,21 @@ func (h *DownloadHandler) deliverMedia(
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	// Upload progress: same 1s / 5-point throttle as the download bar.
+	// Upload progress: same throttle as the download bar (1 s or 5 points).
 	var mu sync.Mutex
-	lastEdit, lastPct := time.Now(), -1
+	lastPct := -1
+	lastEdit := time.Now()
 	onUpload := func(pct int) {
 		mu.Lock()
 		defer mu.Unlock()
-		if pct <= lastPct {
+		if pct <= lastPct || statusMsg == nil {
 			return
 		}
 		if pct < 100 && pct-lastPct < 5 && time.Since(lastEdit) < time.Second {
 			return
 		}
-		lastEdit, lastPct = time.Now(), pct
+		lastPct = pct
+		lastEdit = time.Now()
 		_, _ = h.b.Edit(statusMsg, d.UploadingProgress(utils.RenderProgressBar(pct)), &tele.SendOptions{
 			ParseMode:             tele.ModeHTML,
 			DisableWebPagePreview: true,

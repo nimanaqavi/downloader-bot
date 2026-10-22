@@ -1,6 +1,0 @@
-feat: upload progress bar, 3 concurrent jobs, faster transfers
-
-- mtproto: upload progress callback + 8 parallel part threads (was 1)
-- bot: upload bar reuses the status message after the download bar
-- downloader: 3 queue slots, queued jobs show the normal "checking link" text
-- yt-dlp: concurrent-fragments 8, buffer 1M, ffmpeg threads 2

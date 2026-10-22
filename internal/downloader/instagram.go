@@ -46,25 +46,42 @@ func (d *Downloader) ExtractInstagramMedia(ctx context.Context, mediaURL string)
 		}
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	timeoutCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(timeoutCtx, "python3", args...)
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("python extractor failed: %w", err)
+	// Instagram throttles the shared datacenter IP in bursts, so the exact same
+	// link fails once and then works on resend. Retry inside the request instead
+	// of making the user send it again.
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-time.After(time.Duration(attempt*2) * time.Second):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+
+		cmd := exec.CommandContext(timeoutCtx, "python3", args...)
+		out, err := cmd.Output()
+		if err != nil {
+			lastErr = fmt.Errorf("python extractor failed: %w", err)
+			continue
+		}
+
+		var post InstagramPostInfo
+		if err := json.Unmarshal(out, &post); err != nil {
+			lastErr = fmt.Errorf("parse instagram json: %w", err)
+			continue
+		}
+		if post.Error != "" {
+			lastErr = fmt.Errorf("instagram error: %s", post.Error)
+			continue
+		}
+		return &post, nil
 	}
 
-	var post InstagramPostInfo
-	if err := json.Unmarshal(out, &post); err != nil {
-		return nil, fmt.Errorf("parse instagram json: %w", err)
-	}
-
-	if post.Error != "" {
-		return nil, fmt.Errorf("instagram error: %s", post.Error)
-	}
-
-	return &post, nil
+	return nil, lastErr
 }
 
 func (d *Downloader) DownloadInstagramItem(ctx context.Context, item InstagramMediaItem, onProgress ProgressCallback) (*DownloadResult, error) {
