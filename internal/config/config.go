@@ -34,6 +34,7 @@ type Config struct {
 	Port                   string
 	Host                   string
 	TempDir                string
+	CacheEnabled           bool
 }
 
 // LoadEnvFile optionally loads key-value pairs from a .env file into the environment
@@ -103,6 +104,7 @@ func Load() (*Config, error) {
 	apiHash := getEnvString("TELEGRAM_API_HASH", "b18441a1ff607e10a989891a5462e627")
 	downloadTimeout := getEnvInt("DOWNLOAD_TIMEOUT_SECONDS", 300)
 	autoUpdate := getEnvBool("AUTO_UPDATE_YTDLP", true)
+	cacheEnabled := getEnvBool("CACHE_ENABLED", false)
 
 	cookiesPath := os.Getenv("COOKIES_PATH")
 	igCookiesPath := os.Getenv("INSTAGRAM_COOKIES_PATH")
@@ -165,6 +167,7 @@ func Load() (*Config, error) {
 		Port:                   port,
 		Host:                   host,
 		TempDir:                absTmpDir,
+		CacheEnabled:           cacheEnabled,
 	}, nil
 }
 
