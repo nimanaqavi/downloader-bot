@@ -539,7 +539,9 @@ func (h *DownloadHandler) executePipeline(
 
 			for i := 0; i < total; i++ {
 				item := postInfo.Items[i]
-				itemRes, itemErr := h.dl.DownloadInstagramItem(ctx, item, reportProgress)
+				itemRes, itemErr := h.queue.Add(c.Sender().ID, func() (*downloader.DownloadResult, error) {
+					return h.dl.DownloadInstagramItem(ctx, item, reportProgress)
+				})
 				if itemErr != nil || itemRes == nil {
 					continue
 				}
@@ -549,7 +551,7 @@ func (h *DownloadHandler) executePipeline(
 				if total == 1 && postInfo.Title != "" && postInfo.Title != "Instagram" {
 					caption = fmt.Sprintf("📸 %s\n🤖 @%s", postInfo.Title, h.cfg.BotUsername)
 				}
-				_, _ = h.deliverMedia(c, itemRes, caption, false, statusMsg, d)
+				_, _ = h.deliverMedia(c, itemRes, caption, itemRes.MediaType == "audio", statusMsg, d)
 
 				if itemRes.TempDirectory != "" {
 					_ = os.RemoveAll(itemRes.TempDirectory)

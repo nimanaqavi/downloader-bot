@@ -46,6 +46,29 @@ def embed_photos(url):
     return items
 
 
+MAX_HEIGHT = 720  # Instagram reels: cap at 720p so a single post stays small
+
+
+def pick_video(formats):
+    """Best format at or below 720p; falls back to the smallest we can get."""
+    vids = [f for f in formats if f.get('vcodec') and f.get('vcodec') != 'none']
+    if not vids:
+        return None
+    under = [f for f in vids if (f.get('height') or 0) <= MAX_HEIGHT]
+    pool = under or vids
+    return max(pool, key=lambda f: ((f.get('height') or 0), (f.get('tbr') or 0)))
+
+
+def pick_audio(formats):
+    """Audio-only track (photo posts with music expose one, video posts have it separate)."""
+    auds = [f for f in formats
+            if f.get('acodec') and f.get('acodec') != 'none'
+            and (not f.get('vcodec') or f.get('vcodec') == 'none')]
+    if not auds:
+        return None
+    return max(auds, key=lambda f: (f.get('abr') or f.get('tbr') or 0))
+
+
 def extract(url, cookies_path=None):
     opts = {
         'skip_download': True,
@@ -64,14 +87,24 @@ def extract(url, cookies_path=None):
         if 'no video in this post' in str(e).lower():
             photos = embed_photos(url)
             if photos:
-                return {'title': 'Instagram', 'channel': '', 'items': photos}
+                items = list(photos)
+                try:
+                    info = yt_dlp.YoutubeDL(dict(opts, skip_download=True)).extract_info(
+                        url, download=False, process=True)
+                    aud = pick_audio(info.get('formats') or [])
+                    if aud:
+                        items.append({'type': 'audio', 'url': aud.get('url'),
+                                      'id': info.get('id'), 'duration': info.get('duration')})
+                except Exception:
+                    pass
+                return {'title': 'Instagram', 'channel': '', 'items': items}
         return {'error': str(e)}
 
     items = []
     if info.get('_type') == 'playlist' and info.get('entries'):
         for e in info['entries']:
             formats = e.get('formats') or []
-            video_format = next((f for f in formats if f.get('vcodec') and f.get('vcodec') != 'none'), None)
+            video_format = pick_video(formats)
             if video_format:
                 items.append({
                     'type': 'video',
@@ -89,7 +122,7 @@ def extract(url, cookies_path=None):
                     })
     else:
         formats = info.get('formats') or []
-        video_format = next((f for f in formats if f.get('vcodec') and f.get('vcodec') != 'none'), None)
+        video_format = pick_video(formats)
         if video_format:
             items.append({
                 'type': 'video',

@@ -92,9 +92,11 @@ func (d *Downloader) DownloadInstagramItem(ctx context.Context, item InstagramMe
 
 	ext := "mp4"
 	mediaType := "video"
-	if item.Type == "photo" {
-		ext = "jpg"
-		mediaType = "photo"
+	switch item.Type {
+	case "photo":
+		ext, mediaType = "jpg", "photo"
+	case "audio":
+		ext, mediaType = "m4a", "audio"
 	}
 	outPath := filepath.Join(tmpDir, fmt.Sprintf("instagram_%s.%s", item.ID, ext))
 
