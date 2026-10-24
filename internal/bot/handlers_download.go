@@ -546,6 +546,10 @@ func (h *DownloadHandler) executePipeline(
 					continue
 				}
 
+				if sentCount == 0 {
+					h.sendPlatformStickerIfConfigured(c, "instagram")
+				}
+
 				totalBytes += itemRes.FileSizeBytes
 				caption := fmt.Sprintf("📸 %s\n🤖 @%s", d.CarouselItemTitle(i+1, total), h.cfg.BotUsername)
 				if total == 1 && postInfo.Title != "" && postInfo.Title != "Instagram" {
