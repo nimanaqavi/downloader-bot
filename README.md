@@ -1,6 +1,6 @@
 # Mimo Multi-Downloader Telegram Bot
 
-A lightweight, high-performance TypeScript Telegram bot that downloads public media from virtually any platform supported by `yt-dlp` (YouTube, Instagram, TikTok, Twitter/X, Facebook, Reddit, SoundCloud, Spotify, and generic web links). Built for low-resource environments (e.g. Alwaysdata 256 MB RAM VPS).
+A lightweight, high-performance Go (Golang) Telegram bot that downloads public media from virtually any platform supported by `yt-dlp` (YouTube, Instagram, TikTok, Twitter/X, Facebook, Reddit, SoundCloud, Spotify, and generic web links). Built for low-resource environments (e.g. Alwaysdata 256 MB RAM VPS).
 
 ---
 
@@ -65,15 +65,12 @@ A lightweight, high-performance TypeScript Telegram bot that downloads public me
 ## 🚀 Running the Bot
 
 ```bash
-# Install dependencies
-npm ci
+# Build binary
+go build -o mimo ./cmd/mimo
 
-# Compile TypeScript
-npm run build
+# Run tests
+go test ./...
 
-# Run unit tests
-npm test
-
-# Start in production
-npm start
+# Start the bot
+./mimo
 ```
