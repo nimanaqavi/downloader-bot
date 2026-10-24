@@ -38,3 +38,7 @@ backups/
 __pycache__/
 *.pyc
 
+
+# Binary artifacts & packages
+mimo-*
+*.gz
