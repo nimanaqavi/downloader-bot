@@ -162,6 +162,79 @@ func RegisterAdminHandlers(
 		rendered := db.GetPlatformEmojiHTML(platform)
 		return c.Reply(fmt.Sprintf("✓ ایموجی پلتفرم <b>%s</b> با موفقیت تنظیم شد:\nنمایش: %s\nشناسه: <code>%s</code>", platform, rendered, emojiVal), &tele.SendOptions{ParseMode: tele.ModeHTML})
 	})
+
+	b.Handle("/stickers", func(c tele.Context) error {
+		if !isAdmin(c) {
+			return nil
+		}
+		platforms := []string{"youtube", "instagram", "tiktok", "spotify", "soundcloud", "x"}
+		currentList := ""
+		for _, p := range platforms {
+			stkID := db.GetPlatformSticker(p)
+			status := "❌ تنظیم نشده"
+			if stkID != "" {
+				status = "✓ تنظیم شده"
+			}
+			currentList += fmt.Sprintf("• <b>%s</b>: %s\n", strings.ToUpper(p), status)
+		}
+		return c.Reply(fmt.Sprintf(
+			"<b>وضعیت استیکرهای پلتفرم‌ها:</b>\n\n%s\n"+
+				"💡 برای تنظیم، کافیست هر استیکری را مستقیماً در همین چت خصوصی ارسال کنید.",
+			currentList,
+		), &tele.SendOptions{ParseMode: tele.ModeHTML})
+	})
+
+	b.Handle(tele.OnSticker, func(c tele.Context) error {
+		if !isAdmin(c) || c.Chat().Type != tele.ChatPrivate {
+			return nil
+		}
+		msg := c.Message()
+		if msg == nil || msg.Sticker == nil {
+			return nil
+		}
+		stk := msg.Sticker
+		shortRef := stk.UniqueID
+		if len(shortRef) > 16 {
+			shortRef = shortRef[:16]
+		}
+		_ = db.SetSetting("stkr_ref:"+shortRef, stk.FileID)
+
+		menu := &tele.ReplyMarkup{}
+		rows := []tele.Row{
+			menu.Row(
+				menu.Data("YouTube ▶️", "adm:stkr:youtube:"+shortRef),
+				menu.Data("Instagram 📸", "adm:stkr:instagram:"+shortRef),
+			),
+			menu.Row(
+				menu.Data("TikTok 🎶", "adm:stkr:tiktok:"+shortRef),
+				menu.Data("Spotify 🟢", "adm:stkr:spotify:"+shortRef),
+			),
+			menu.Row(
+				menu.Data("SoundCloud ☁️", "adm:stkr:soundcloud:"+shortRef),
+				menu.Data("X (Twitter) ✖️", "adm:stkr:x:"+shortRef),
+			),
+		}
+		menu.Inline(rows...)
+
+		setName := stk.SetName
+		if setName == "" {
+			setName = "بدون پک رسمی"
+		}
+		text := fmt.Sprintf(
+			"🏷 <b>تحلیل استیکر ارسالی (مخصوص ادمین)</b>\n\n"+
+				"▫️ <b>نام بسته:</b> <code>%s</code>\n"+
+				"▫️ <b>ایموجی:</b> %s\n"+
+				"▫️ <b>file_id:</b> <code>%s</code>\n\n"+
+				"👇 انتخاب پلتفرم جهت انتساب و ارسال خودکار پیش از دانلود:",
+			utils.EscapeHTML(setName),
+			stk.Emoji,
+			stk.FileID,
+		)
+		return c.Reply(text, &tele.SendOptions{
+			ParseMode:   tele.ModeHTML,
+			ReplyMarkup: menu,
+		})
+	})
 }
 
 func HandleAllAdminCallbacks(
@@ -199,6 +272,25 @@ func HandleAllAdminCallbacks(
 			ParseMode:   tele.ModeHTML,
 			ReplyMarkup: AdminMenu(db.IsPlatformStickersEnabled()),
 		})
+
+	case strings.HasPrefix(data, "adm:stkr:"):
+		parts := strings.Split(data, ":")
+		if len(parts) >= 4 {
+			platform := parts[2]
+			ref := parts[3]
+			fileID := db.GetSetting("stkr_ref:" + ref)
+			if fileID == "" {
+				_ = c.Respond(&tele.CallbackResponse{Text: "شناسه این استیکر منقضی شده است. لطفاً استیکر را مجدداً ارسال کنید.", ShowAlert: true})
+				return
+			}
+			_ = db.SetPlatformSticker(platform, fileID)
+			_ = c.Respond(&tele.CallbackResponse{Text: "✓ استیکر با موفقیت ذخیره شد!"})
+			_ = c.Edit(fmt.Sprintf("✓ استیکر با موفقیت برای پلتفرم <b>%s</b> تنظیم شد.", strings.ToUpper(platform)), &tele.SendOptions{
+				ParseMode: tele.ModeHTML,
+			})
+			return
+		}
+		_ = c.Respond()
 
 	case data == "adm:stats":
 		_ = c.Respond()
