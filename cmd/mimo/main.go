@@ -160,7 +160,21 @@ func main() {
 		go scheduleYtDlpUpdates()
 	}
 
-	// 12. Handle Graceful Shutdown
+	// 12. Watch restart trigger for zero-touch deploys via SSH
+	triggerFile := filepath.Join(cfg.TempDir, "restart.trigger")
+	_ = os.Remove(triggerFile)
+	go func() {
+		for {
+			time.Sleep(2 * time.Second)
+			if _, err := os.Stat(triggerFile); err == nil {
+				_ = os.Remove(triggerFile)
+				log.Println("[restart] Trigger file detected, exiting for supervisor respawn...")
+				os.Exit(0)
+			}
+		}
+	}()
+
+	// 13. Handle Graceful Shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 

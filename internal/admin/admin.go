@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	tele "gopkg.in/telebot.v3"
 
@@ -72,6 +73,17 @@ func RegisterAdminHandlers(
 			ParseMode:   tele.ModeHTML,
 			ReplyMarkup: AdminMenu(db.IsPlatformStickersEnabled()),
 		})
+	})
+
+	b.Handle("/restart", func(c tele.Context) error {
+		if !isAdmin(c) {
+			return nil
+		}
+		_ = c.Send("🔄 <i>Restarting bot service...</i>", &tele.SendOptions{ParseMode: tele.ModeHTML})
+		time.AfterFunc(500*time.Millisecond, func() {
+			os.Exit(0)
+		})
+		return nil
 	})
 
 	b.Handle("/cancel", func(c tele.Context) error {

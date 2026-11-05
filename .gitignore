@@ -16,8 +16,6 @@ data/*.db-*
 /mimo
 /mimo.exe
 *.exe
-mimo
-mimo.exe
 dist/
 node_modules/
 
