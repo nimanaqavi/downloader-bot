@@ -83,10 +83,51 @@ func ParseSpotifyURL(rawURL string) (cleanURL string, linkType string, err error
 }
 
 func FetchSpotifyMetadata(ctx context.Context, normalizedURL string) (*SpotifyTrackInfo, error) {
-	// Strategy A: oEmbed API with retry
+	// Strategy A: HTML scraping (provides Title, Artist from og:description, and ThumbnailURL)
+	req, err := http.NewRequestWithContext(ctx, "GET", normalizedURL, nil)
+	if err == nil {
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+		client := &http.Client{Timeout: 7 * time.Second}
+		resp, err := client.Do(req)
+		if err == nil && resp.StatusCode == 200 {
+			defer resp.Body.Close()
+			buf := make([]byte, 64*1024)
+			n, _ := resp.Body.Read(buf)
+			html := string(buf[:n])
+
+			ogTitleReg := regexp.MustCompile(`(?i)<meta\s+property=["']og:title["']\s+content=["']([^"']+)["']`)
+			ogDescReg := regexp.MustCompile(`(?i)<meta\s+property=["']og:description["']\s+content=["']([^"']+)["']`)
+			ogImageReg := regexp.MustCompile(`(?i)<meta\s+property=["']og:image["']\s+content=["']([^"']+)["']`)
+
+			tMatch := ogTitleReg.FindStringSubmatch(html)
+			if len(tMatch) > 1 {
+				title := strings.TrimSpace(tMatch[1])
+				artist := ""
+				dMatch := ogDescReg.FindStringSubmatch(html)
+				if len(dMatch) > 1 {
+					parts := strings.Split(dMatch[1], "·")
+					if len(parts) > 0 {
+						artist = strings.TrimSpace(parts[0])
+					}
+				}
+				thumb := ""
+				iMatch := ogImageReg.FindStringSubmatch(html)
+				if len(iMatch) > 1 {
+					thumb = strings.TrimSpace(iMatch[1])
+				}
+				return &SpotifyTrackInfo{
+					Title:        title,
+					Artist:       artist,
+					ThumbnailURL: thumb,
+				}, nil
+			}
+		}
+	}
+
+	// Strategy B: Fallback to oEmbed API
 	oembedURL := fmt.Sprintf("https://open.spotify.com/oembed?url=%s", url.QueryEscape(normalizedURL))
 
-	for attempt := 1; attempt <= 3; attempt++ {
+	for attempt := 1; attempt <= 2; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, "GET", oembedURL, nil)
 		if err == nil {
 			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -112,40 +153,6 @@ func FetchSpotifyMetadata(ctx context.Context, normalizedURL string) (*SpotifyTr
 			}
 		}
 		time.Sleep(time.Duration(attempt*300) * time.Millisecond)
-	}
-
-	// Strategy B: Fallback HTML scraping
-	req, err := http.NewRequestWithContext(ctx, "GET", normalizedURL, nil)
-	if err == nil {
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-		client := &http.Client{Timeout: 7 * time.Second}
-		resp, err := client.Do(req)
-		if err == nil && resp.StatusCode == 200 {
-			defer resp.Body.Close()
-			buf := make([]byte, 64*1024)
-			n, _ := resp.Body.Read(buf)
-			html := string(buf[:n])
-
-			ogTitleReg := regexp.MustCompile(`(?i)<meta\s+property=["']og:title["']\s+content=["']([^"']+)["']`)
-			ogDescReg := regexp.MustCompile(`(?i)<meta\s+property=["']og:description["']\s+content=["']([^"']+)["']`)
-
-			tMatch := ogTitleReg.FindStringSubmatch(html)
-			if len(tMatch) > 1 {
-				title := strings.TrimSpace(tMatch[1])
-				artist := ""
-				dMatch := ogDescReg.FindStringSubmatch(html)
-				if len(dMatch) > 1 {
-					parts := strings.Split(dMatch[1], "·")
-					if len(parts) > 1 {
-						artist = strings.TrimSpace(parts[1])
-					}
-				}
-				return &SpotifyTrackInfo{
-					Title:  title,
-					Artist: artist,
-				}, nil
-			}
-		}
 	}
 
 	return nil, errors.New("failed to retrieve spotify track metadata")
