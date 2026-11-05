@@ -735,6 +735,8 @@ func (h *DownloadHandler) deliverMedia(
 				Title:     result.Title,
 				Performer: result.Author,
 				Duration:  int(result.DurationSeconds),
+				MIME:      "audio/mpeg",
+				FileName:  utils.CleanAudioFileName(result.Author, result.Title, result.MediaPath),
 			}
 			msg, err := h.b.Send(c.Recipient(), audio, &tele.SendOptions{ParseMode: tele.ModeHTML})
 			if err != nil {

@@ -99,3 +99,21 @@ func TestAccountUsedMB(t *testing.T) {
 		t.Errorf("expected ~1MB measured, got %d MB", got)
 	}
 }
+
+func TestCleanAudioFileName(t *testing.T) {
+	cases := []struct {
+		author, title, fallback, want string
+	}{
+		{"Eminem", "Lose Yourself", "/tmp/dl.mp3", "Eminem - Lose Yourself.mp3"},
+		{"AC/DC", "Back in Black", "/tmp/dl.mp3", "AC_DC - Back in Black.mp3"},
+		{"", "Single Track", "/tmp/dl.mp3", "Single Track.mp3"},
+		{"Solo Artist", "", "/tmp/dl.mp3", "Solo Artist.mp3"},
+		{"", "", "/tmp/mimo-123.mp3", "mimo-123.mp3"},
+		{"", "", "/tmp/mimo-raw", "mimo-raw.mp3"},
+	}
+	for _, tc := range cases {
+		if got := CleanAudioFileName(tc.author, tc.title, tc.fallback); got != tc.want {
+			t.Errorf("CleanAudioFileName(%q, %q, %q) = %q; want %q", tc.author, tc.title, tc.fallback, got, tc.want)
+		}
+	}
+}

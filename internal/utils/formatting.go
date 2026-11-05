@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html"
 	"math"
+	"path/filepath"
 	"strings"
 
 	"mimo/internal/i18n"
@@ -221,4 +222,29 @@ func BuildFinalCaption(opts FinalCaptionOpts) string {
 	}
 
 	return caption
+}
+
+// CleanAudioFileName generates a safe, valid .mp3 filename for Telegram audio documents.
+// ponytail: strip illegal filesystem and path characters; upgrade if full UTF-8 normalization needed
+func CleanAudioFileName(author, title, fallbackPath string) string {
+	name := strings.TrimSpace(title)
+	if a := strings.TrimSpace(author); a != "" && name != "" {
+		name = a + " - " + name
+	} else if name == "" {
+		name = a
+	}
+	if name == "" {
+		base := filepath.Base(fallbackPath)
+		if strings.HasSuffix(strings.ToLower(base), ".mp3") {
+			return base
+		}
+		return base + ".mp3"
+	}
+	clean := strings.Map(func(r rune) rune {
+		if strings.ContainsRune(`/\\:*?"<>|`+"\n\r	", r) {
+			return '_'
+		}
+		return r
+	}, name)
+	return clean + ".mp3"
 }

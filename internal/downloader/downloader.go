@@ -518,7 +518,8 @@ func (d *Downloader) Download(
 	}
 
 	if isAudio {
-		args = append(args, "--extract-audio", "--audio-format", "mp3")
+		// ponytail: embed id3 metadata so local music players index artist and title
+		args = append(args, "--extract-audio", "--audio-format", "mp3", "--embed-metadata")
 	} else {
 		args = append(args, "--merge-output-format", "mp4")
 	}
