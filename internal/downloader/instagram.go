@@ -14,9 +14,12 @@ import (
 
 type InstagramMediaItem struct {
 	ID       string  `json:"id"`
-	Type     string  `json:"type"` // "photo" or "video"
+	Type     string  `json:"type"` // "photo" or "video" or "audio"
 	URL      string  `json:"url"`
+	AudioURL string  `json:"audio_url,omitempty"`
 	Duration float64 `json:"duration,omitempty"`
+	Title    string  `json:"title,omitempty"`
+	Author   string  `json:"author,omitempty"`
 }
 
 type InstagramPostInfo struct {
@@ -78,6 +81,14 @@ func (d *Downloader) ExtractInstagramMedia(ctx context.Context, mediaURL string)
 			lastErr = fmt.Errorf("instagram error: %s", post.Error)
 			continue
 		}
+		for i := range post.Items {
+			if post.Items[i].Title == "" {
+				post.Items[i].Title = post.Title
+			}
+			if post.Items[i].Author == "" {
+				post.Items[i].Author = post.Channel
+			}
+		}
 		return &post, nil
 	}
 
@@ -100,47 +111,75 @@ func (d *Downloader) DownloadInstagramItem(ctx context.Context, item InstagramMe
 	}
 	outPath := filepath.Join(tmpDir, fmt.Sprintf("instagram_%s.%s", item.ID, ext))
 
-	req, err := http.NewRequestWithContext(ctx, "GET", item.URL, nil)
-	if err != nil {
-		os.RemoveAll(tmpDir)
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		os.RemoveAll(tmpDir)
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		os.RemoveAll(tmpDir)
-		return nil, fmt.Errorf("instagram CDN HTTP %d", resp.StatusCode)
-	}
-
-	f, err := os.Create(outPath)
-	if err != nil {
-		os.RemoveAll(tmpDir)
-		return nil, err
-	}
-	defer f.Close()
-
-	bodyReader := io.Reader(resp.Body)
-	if onProgress != nil && resp.ContentLength > 0 {
-		bodyReader = &progressReader{
-			reader:     resp.Body,
-			total:      resp.ContentLength,
-			onProgress: onProgress,
-			lastPct:    -1,
+	client := &http.Client{Timeout: 45 * time.Second}
+	downloadFile := func(targetURL, targetPath string, trackProgress bool) (int64, error) {
+		req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil)
+		if err != nil {
+			return 0, err
 		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+		resp, err := client.Do(req)
+		if err != nil {
+			return 0, err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return 0, fmt.Errorf("instagram CDN HTTP %d", resp.StatusCode)
+		}
+		f, err := os.Create(targetPath)
+		if err != nil {
+			return 0, err
+		}
+		defer f.Close()
+
+		var r io.Reader = resp.Body
+		if trackProgress && onProgress != nil && resp.ContentLength > 0 {
+			r = &progressReader{reader: resp.Body, total: resp.ContentLength, onProgress: onProgress, lastPct: -1}
+		}
+		return io.Copy(f, r)
 	}
 
-	written, err := io.Copy(f, bodyReader)
-	if err != nil {
-		os.RemoveAll(tmpDir)
-		return nil, err
+	var written int64
+	if mediaType == "video" && item.AudioURL != "" {
+		// ponytail: DASH video + audio stream merge with ffmpeg -c copy
+		videoTmp := filepath.Join(tmpDir, "video_stream.mp4")
+		audioTmp := filepath.Join(tmpDir, "audio_stream.m4a")
+
+		vSize, err := downloadFile(item.URL, videoTmp, true)
+		if err != nil {
+			os.RemoveAll(tmpDir)
+			return nil, fmt.Errorf("download video stream: %w", err)
+		}
+		aSize, err := downloadFile(item.AudioURL, audioTmp, false)
+		if err != nil {
+			_ = os.Rename(videoTmp, outPath)
+			written = vSize
+		} else {
+			ffmpegBin := "ffmpeg"
+			if d.getFfmpegDir() != "" {
+				ffmpegBin = filepath.Join(d.getFfmpegDir(), "ffmpeg")
+			}
+			mergeCmd := exec.CommandContext(ctx, ffmpegBin, "-y", "-i", videoTmp, "-i", audioTmp, "-c", "copy", "-movflags", "+faststart", outPath)
+			if err := mergeCmd.Run(); err != nil {
+				_ = os.Rename(videoTmp, outPath)
+				written = vSize
+			} else {
+				if fi, err := os.Stat(outPath); err == nil {
+					written = fi.Size()
+				} else {
+					written = vSize + aSize
+				}
+				_ = os.Remove(videoTmp)
+				_ = os.Remove(audioTmp)
+			}
+		}
+	} else {
+		w, err := downloadFile(item.URL, outPath, true)
+		if err != nil {
+			os.RemoveAll(tmpDir)
+			return nil, err
+		}
+		written = w
 	}
 
 	width, height, dur := 0, 0, item.Duration
@@ -152,17 +191,22 @@ func (d *Downloader) DownloadInstagramItem(ctx context.Context, item InstagramMe
 		}
 	}
 
+	title := item.Title
+	if title == "" {
+		title = "Instagram"
+	}
+
 	return &DownloadResult{
 		MediaPath:       outPath,
 		VideoPath:       outPath,
 		MediaType:       mediaType,
 		FileSizeBytes:   written,
-		Title:           "Instagram",
+		Title:           title,
 		DurationSeconds: dur,
 		Width:           width,
 		Height:          height,
 		PlatformName:    "Instagram",
-		Author:          "",
+		Author:          item.Author,
 		TempDirectory:   tmpDir,
 	}, nil
 }

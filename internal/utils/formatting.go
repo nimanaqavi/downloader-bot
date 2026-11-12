@@ -248,3 +248,28 @@ func CleanAudioFileName(author, title, fallbackPath string) string {
 	}, name)
 	return clean + ".mp3"
 }
+
+// CleanVideoFileName generates a safe, valid .mp4 filename for Telegram video messages.
+// ponytail: strip illegal filesystem characters; upgrade if advanced transliteration needed
+func CleanVideoFileName(author, title, fallbackPath string) string {
+	name := strings.TrimSpace(title)
+	if a := strings.TrimSpace(author); a != "" && name != "" && !strings.EqualFold(a, name) {
+		name = a + " - " + name
+	} else if name == "" {
+		name = a
+	}
+	if name == "" || strings.EqualFold(name, "media") || strings.EqualFold(name, "video") {
+		base := filepath.Base(fallbackPath)
+		if strings.HasSuffix(strings.ToLower(base), ".mp4") {
+			return base
+		}
+		return base + ".mp4"
+	}
+	clean := strings.Map(func(r rune) rune {
+		if strings.ContainsRune(`/\\:*?"<>|`+"\n\r	", r) {
+			return '_'
+		}
+		return r
+	}, name)
+	return clean + ".mp4"
+}

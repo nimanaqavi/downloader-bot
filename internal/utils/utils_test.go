@@ -117,3 +117,20 @@ func TestCleanAudioFileName(t *testing.T) {
 		}
 	}
 }
+
+func TestCleanVideoFileName(t *testing.T) {
+	cases := []struct {
+		author, title, fallback, want string
+	}{
+		{"Channel", "My Video", "/tmp/dl.mp4", "Channel - My Video.mp4"},
+		{"Same", "Same", "/tmp/dl.mp4", "Same.mp4"},
+		{"", "Video Only", "/tmp/dl.mp4", "Video Only.mp4"},
+		{"", "Media", "/tmp/fallback.mp4", "fallback.mp4"},
+		{"", "", "/tmp/raw-123", "raw-123.mp4"},
+	}
+	for _, tc := range cases {
+		if got := CleanVideoFileName(tc.author, tc.title, tc.fallback); got != tc.want {
+			t.Errorf("CleanVideoFileName(%q, %q, %q) = %q; want %q", tc.author, tc.title, tc.fallback, got, tc.want)
+		}
+	}
+}

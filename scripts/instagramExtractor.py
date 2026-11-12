@@ -33,7 +33,7 @@ def embed_photos(url):
         return []
 
     items, seen = [], set()
-    pattern = "https://[^\"']+?\\.jpg[^\"']*"
+    pattern = r"https://[^\"']+?\.jpg[^\"']*"
     for u in re.findall(pattern, page):
         u = u.replace('&amp;', '&').strip()
         if 's100x100' in u or '/v/t51.2885-19/' in u:
@@ -50,20 +50,44 @@ MAX_HEIGHT = 720  # Instagram reels: cap at 720p so a single post stays small
 
 
 def pick_video(formats):
-    """Best format at or below 720p; falls back to the smallest we can get."""
-    vids = [f for f in formats if f.get('vcodec') and f.get('vcodec') != 'none']
-    if not vids:
-        return None
-    under = [f for f in vids if (f.get('height') or 0) <= MAX_HEIGHT]
-    pool = under or vids
-    return max(pool, key=lambda f: ((f.get('height') or 0), (f.get('tbr') or 0)))
+    """Prefer progressive video formats (formats 1, 2, 3) which contain both video and audio.
+    If only DASH streams exist, return best video format and separate audio format URL."""
+    if not formats:
+        return None, None
+
+    # 1. Look for progressive formats (has both video & audio streams from Instagram CDN)
+    progressives = [
+        f for f in formats
+        if (f.get('format_id') in ('1', '2', '3') or (f.get('vcodec') and f.get('vcodec') != 'none' and f.get('acodec') and f.get('acodec') != 'none'))
+        and f.get('url')
+    ]
+    if progressives:
+        return progressives[0], None
+
+    # 2. Separate video and audio (DASH)
+    vids = [f for f in formats if ((f.get('vcodec') and f.get('vcodec') != 'none') or f.get('video_ext') == 'mp4') and f.get('url')]
+    auds = [f for f in formats if ((f.get('acodec') and f.get('acodec') != 'none') or f.get('audio_ext') in ('m4a', 'mp3')) and f.get('url')]
+
+    best_v = None
+    if vids:
+        under = [f for f in vids if (f.get('height') or 0) <= MAX_HEIGHT]
+        pool = under or vids
+        best_v = max(pool, key=lambda f: ((f.get('height') or 0), (f.get('tbr') or 0)))
+
+    best_a = None
+    if auds:
+        best_a = max(auds, key=lambda f: (f.get('abr') or f.get('tbr') or 0))
+
+    audio_url = best_a.get('url') if best_a else None
+    return best_v, audio_url
 
 
 def pick_audio(formats):
     """Audio-only track (photo posts with music expose one, video posts have it separate)."""
     auds = [f for f in formats
             if f.get('acodec') and f.get('acodec') != 'none'
-            and (not f.get('vcodec') or f.get('vcodec') == 'none')]
+            and (not f.get('vcodec') or f.get('vcodec') == 'none')
+            and f.get('url')]
     if not auds:
         return None
     return max(auds, key=lambda f: (f.get('abr') or f.get('tbr') or 0))
@@ -104,14 +128,17 @@ def extract(url, cookies_path=None):
     if info.get('_type') == 'playlist' and info.get('entries'):
         for e in info['entries']:
             formats = e.get('formats') or []
-            video_format = pick_video(formats)
+            video_format, audio_url = pick_video(formats)
             if video_format:
-                items.append({
+                item_dict = {
                     'type': 'video',
                     'url': video_format.get('url'),
                     'id': e.get('id'),
                     'duration': e.get('duration')
-                })
+                }
+                if audio_url:
+                    item_dict['audio_url'] = audio_url
+                items.append(item_dict)
             else:
                 thumbs = e.get('thumbnails') or []
                 if thumbs:
@@ -122,14 +149,17 @@ def extract(url, cookies_path=None):
                     })
     else:
         formats = info.get('formats') or []
-        video_format = pick_video(formats)
+        video_format, audio_url = pick_video(formats)
         if video_format:
-            items.append({
+            item_dict = {
                 'type': 'video',
                 'url': video_format.get('url'),
                 'id': info.get('id'),
                 'duration': info.get('duration')
-            })
+            }
+            if audio_url:
+                item_dict['audio_url'] = audio_url
+            items.append(item_dict)
         else:
             thumbs = info.get('thumbnails') or []
             if thumbs:
@@ -141,7 +171,7 @@ def extract(url, cookies_path=None):
 
     return {
         'title': info.get('title') or info.get('description') or 'Instagram',
-        'channel': info.get('channel') or info.get('uploader'),
+        'channel': info.get('channel') or info.get('uploader') or '',
         'items': items
     }
 

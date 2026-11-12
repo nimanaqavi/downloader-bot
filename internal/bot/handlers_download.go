@@ -752,6 +752,7 @@ func (h *DownloadHandler) deliverMedia(
 			Width:     result.Width,
 			Height:    result.Height,
 			MIME:      "video/mp4",
+			FileName:  utils.CleanVideoFileName(result.Author, result.Title, result.MediaPath),
 			Streaming: true,
 		}
 		msg, err := h.b.Send(c.Recipient(), video, &tele.SendOptions{ParseMode: tele.ModeHTML})

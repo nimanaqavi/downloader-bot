@@ -135,7 +135,8 @@ func (d *Downloader) getFfmpegDir() string {
 }
 
 func (d *Downloader) FetchMetadata(ctx context.Context, mediaURL string) (*Metadata, error) {
-	h := sha256.Sum256([]byte(mediaURL))
+	normURL := utils.NormalizeMediaURL(mediaURL)
+	h := sha256.Sum256([]byte(normURL))
 	hashKey := hex.EncodeToString(h[:8])
 
 	d.metaCacheMu.RLock()
@@ -508,6 +509,7 @@ func (d *Downloader) Download(
 		"--concurrent-fragments", "8",
 		"--retries", "3",
 		"--fragment-retries", "3",
+		"--write-info-json",
 		"--format", formatString,
 		"--output", outTemplate,
 		"--postprocessor-args", "ffmpeg:-threads 2 -movflags +faststart",
@@ -676,13 +678,45 @@ func (d *Downloader) Download(
 	author := ""
 	var duration float64
 
-	h := sha256.Sum256([]byte(mediaURL))
+	// ponytail: extract real title and author from downloaded info.json directly
+	if matches, _ := filepath.Glob(filepath.Join(tmpDir, "*.info.json")); len(matches) > 0 {
+		if data, err := os.ReadFile(matches[0]); err == nil {
+			var info struct {
+				Title    string  `json:"title"`
+				Uploader string  `json:"uploader"`
+				Artist   string  `json:"artist"`
+				Duration float64 `json:"duration"`
+			}
+			if err := json.Unmarshal(data, &info); err == nil {
+				if t := strings.TrimSpace(info.Title); t != "" {
+					title = t
+				}
+				if a := strings.TrimSpace(info.Artist); a != "" {
+					author = a
+				} else if u := strings.TrimSpace(info.Uploader); u != "" {
+					author = u
+				}
+				if info.Duration > 0 && duration == 0 {
+					duration = info.Duration
+				}
+			}
+		}
+	}
+
+	normURL := utils.NormalizeMediaURL(mediaURL)
+	h := sha256.Sum256([]byte(normURL))
 	hashKey := hex.EncodeToString(h[:8])
 	d.metaCacheMu.RLock()
 	if cachedEntry, hasCached := d.metaCacheFiles[hashKey]; hasCached {
-		title = cachedEntry.meta.Title
-		author = cachedEntry.meta.Author
-		duration = cachedEntry.meta.Duration
+		if (title == "Media" || title == "") && cachedEntry.meta.Title != "" {
+			title = cachedEntry.meta.Title
+		}
+		if author == "" {
+			author = cachedEntry.meta.Author
+		}
+		if duration == 0 {
+			duration = cachedEntry.meta.Duration
+		}
 	}
 	d.metaCacheMu.RUnlock()
 
